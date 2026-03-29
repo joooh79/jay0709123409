@@ -11,6 +11,10 @@ const PORT = Number(process.env.PORT || process.env.MCP_ADAPTER_PORT || 8790);
 const SENDER_BASE_URL =
   process.env.SENDER_BASE_URL || 'http://127.0.0.1:8787';
 
+const WARM_MAX_ATTEMPTS = Number(process.env.SENDER_WARM_MAX_ATTEMPTS || 8);
+const WARM_RETRY_DELAY_MS = Number(process.env.SENDER_WARM_RETRY_DELAY_MS || 2500);
+const WARM_REQUEST_TIMEOUT_MS = Number(process.env.SENDER_WARM_REQUEST_TIMEOUT_MS || 12000);
+
 const sessions = new Map();
 
 function corsHeaders() {
@@ -29,15 +33,6 @@ function sendJson(res, statusCode, body) {
     'Content-Length': Buffer.byteLength(data)
   });
   res.end(data);
-}
-
-function sendText(res, statusCode, text, contentType = 'text/plain; charset=utf-8') {
-  res.writeHead(statusCode, {
-    ...corsHeaders(),
-    'Content-Type': contentType,
-    'Content-Length': Buffer.byteLength(text)
-  });
-  res.end(text);
 }
 
 function sendNoContent(res, statusCode = 204, extraHeaders = {}) {
@@ -72,7 +67,11 @@ function parseJsonBody(req) {
   });
 }
 
-function httpRequest(urlString, method = 'GET', body = null) {
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function httpRequest(urlString, method = 'GET', body = null, timeoutMs = WARM_REQUEST_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
     const url = new URL(urlString);
     const payload = body ? JSON.stringify(body) : null;
@@ -118,6 +117,10 @@ function httpRequest(urlString, method = 'GET', body = null) {
       });
     });
 
+    request.setTimeout(timeoutMs, () => {
+      request.destroy(new Error(`Request timed out after ${timeoutMs}ms`));
+    });
+
     request.on('error', reject);
 
     if (payload) {
@@ -132,6 +135,50 @@ function requireObject(value, name) {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new Error(`${name} must be an object`);
   }
+}
+
+function isGarbledText(value) {
+  if (typeof value !== 'string') return false;
+  return value.includes('�');
+}
+
+function safeString(value) {
+  return typeof value === 'string' ? value : '';
+}
+
+function extractBestMessage(senderJson) {
+  const topLevelMessage = safeString(senderJson.message);
+
+  const parsedMessage =
+    senderJson.make_response_parsed &&
+    typeof senderJson.make_response_parsed === 'object'
+      ? safeString(senderJson.make_response_parsed.message)
+      : '';
+
+  if (parsedMessage && !isGarbledText(parsedMessage)) {
+    return parsedMessage;
+  }
+
+  if (topLevelMessage && !isGarbledText(topLevelMessage)) {
+    return topLevelMessage;
+  }
+
+  const raw = safeString(senderJson.make_response_raw);
+
+  if (raw) {
+    try {
+      const reparsed = JSON.parse(raw);
+      const rawMessage = safeString(reparsed.message);
+
+      if (rawMessage) {
+        return rawMessage;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  return parsedMessage || topLevelMessage || '';
 }
 
 function normalizeSenderHealth(senderJson) {
@@ -166,7 +213,7 @@ function normalizeSendOutput(senderJson) {
     status: senderJson.status || '',
     stage: senderJson.stage || '',
     result_type: senderJson.result_type || 'technical_error',
-    message: senderJson.message || '',
+    message: extractBestMessage(senderJson),
     write_allowed:
       typeof senderJson.write_allowed === 'boolean'
         ? senderJson.write_allowed
@@ -252,28 +299,115 @@ function toolDefinitions() {
   ];
 }
 
+function isLikelyRenderLoadingPage(upstream) {
+  const contentType = String(upstream.headers?.['content-type'] || '').toLowerCase();
+  const bodyText = String(upstream.bodyText || '').toLowerCase();
+
+  if (contentType.includes('text/html')) return true;
+  if (bodyText.includes('render') && bodyText.includes('application loading')) return true;
+  if (bodyText.includes('service waking up')) return true;
+  if (bodyText.includes('allocating compute resources')) return true;
+
+  return false;
+}
+
+function isHealthySenderHealthResponse(upstream) {
+  return !!(
+    upstream &&
+    upstream.statusCode >= 200 &&
+    upstream.statusCode < 300 &&
+    upstream.bodyJson &&
+    upstream.bodyJson.ok === true
+  );
+}
+
+async function ensureSenderReady() {
+  let lastError = null;
+  let lastUpstream = null;
+
+  for (let attempt = 1; attempt <= WARM_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const upstream = await httpRequest(`${SENDER_BASE_URL}/health`, 'GET');
+      lastUpstream = upstream;
+
+      if (isHealthySenderHealthResponse(upstream)) {
+        return {
+          ok: true,
+          attempts: attempt,
+          upstream
+        };
+      }
+
+      if (isLikelyRenderLoadingPage(upstream)) {
+        lastError = new Error(
+          `Sender still warming up (attempt ${attempt}/${WARM_MAX_ATTEMPTS})`
+        );
+      } else if (!upstream.bodyJson) {
+        lastError = new Error(
+          `Sender health returned non-JSON response (attempt ${attempt}/${WARM_MAX_ATTEMPTS})`
+        );
+      } else {
+        lastError = new Error(
+          `Sender health not ready yet (attempt ${attempt}/${WARM_MAX_ATTEMPTS})`
+        );
+      }
+    } catch (error) {
+      lastError = error;
+    }
+
+    if (attempt < WARM_MAX_ATTEMPTS) {
+      await sleep(WARM_RETRY_DELAY_MS);
+    }
+  }
+
+  const detail =
+    lastUpstream && !lastUpstream.bodyJson
+      ? {
+          statusCode: lastUpstream.statusCode,
+          contentType: lastUpstream.headers?.['content-type'] || '',
+          bodyPreview: String(lastUpstream.bodyText || '').slice(0, 300)
+        }
+      : null;
+
+  const error = new Error(
+    `Sender warm-check failed after ${WARM_MAX_ATTEMPTS} attempts: ${lastError ? lastError.message : 'unknown error'}`
+  );
+  error.detail = detail;
+  throw error;
+}
+
+async function callSenderJson(path, method, body = null) {
+  await ensureSenderReady();
+
+  const upstream = await httpRequest(`${SENDER_BASE_URL}${path}`, method, body);
+
+  if (upstream.bodyJson) {
+    return upstream;
+  }
+
+  const contentType = upstream.headers?.['content-type'] || '';
+  const preview = String(upstream.bodyText || '').slice(0, 300);
+
+  throw new Error(
+    `Sender endpoint ${path} returned non-JSON response. status=${upstream.statusCode}, contentType=${contentType}, bodyPreview=${preview}`
+  );
+}
+
 async function handleToolCall(toolName, args) {
   if (toolName === 'sender_health') {
-    const upstream = await httpRequest(`${SENDER_BASE_URL}/health`, 'GET');
-    if (!upstream.bodyJson) {
-      throw new Error('sender_health returned non-JSON response');
-    }
-    return normalizeSenderHealth(upstream.bodyJson);
+    const warm = await ensureSenderReady();
+    return normalizeSenderHealth(warm.upstream.bodyJson);
   }
 
   if (toolName === 'sender_transform') {
     requireObject(args, 'args');
     requireObject(args.payload, 'args.payload');
 
-    const upstream = await httpRequest(
-      `${SENDER_BASE_URL}/transform`,
+    const upstream = await callSenderJson(
+      '/transform',
       'POST',
       { payload: args.payload }
     );
-
-    if (!upstream.bodyJson) {
-      throw new Error('sender_transform returned non-JSON response');
-    }
 
     return normalizeTransformOutput(upstream.bodyJson);
   }
@@ -282,15 +416,11 @@ async function handleToolCall(toolName, args) {
     requireObject(args, 'args');
     requireObject(args.payload, 'args.payload');
 
-    const upstream = await httpRequest(
-      `${SENDER_BASE_URL}/send`,
+    const upstream = await callSenderJson(
+      '/send',
       'POST',
       { payload: args.payload }
     );
-
-    if (!upstream.bodyJson) {
-      throw new Error('sender_send returned non-JSON response');
-    }
 
     return normalizeSendOutput(upstream.bodyJson);
   }
@@ -340,7 +470,7 @@ function sendRpcResult(sessionId, id, result) {
   });
 }
 
-function sendRpcError(sessionId, id, code, message) {
+function sendRpcError(sessionId, id, code, message, data = null) {
   const session = sessions.get(sessionId);
   if (!session) return;
 
@@ -349,7 +479,8 @@ function sendRpcError(sessionId, id, code, message) {
     id: id ?? null,
     error: {
       code,
-      message
+      message,
+      data
     }
   });
 }
@@ -371,7 +502,7 @@ async function handleRpc(sessionId, message) {
       },
       serverInfo: {
         name: 'ai-dental-clinic-sender',
-        version: '0.1.0'
+        version: '0.2.1'
       }
     });
   }
@@ -411,7 +542,13 @@ async function handleRpc(sessionId, message) {
         structuredContent: result
       });
     } catch (error) {
-      return sendRpcError(sessionId, id, -32000, error.message || 'Tool call failed');
+      return sendRpcError(
+        sessionId,
+        id,
+        -32000,
+        error.message || 'Tool call failed',
+        error.detail || null
+      );
     }
   }
 
@@ -431,12 +568,16 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, {
         ok: true,
         service: 'ai-dental-clinic-mcp-sse-server',
-        version: '0.2.0',
-        sender_base_url: SENDER_BASE_URL
+        version: '0.2.1',
+        sender_base_url: SENDER_BASE_URL,
+        warm_config: {
+          max_attempts: WARM_MAX_ATTEMPTS,
+          retry_delay_ms: WARM_RETRY_DELAY_MS,
+          request_timeout_ms: WARM_REQUEST_TIMEOUT_MS
+        }
       });
     }
 
-    // MCP SSE endpoint: root path itself
     if (req.method === 'GET' && (pathname === '/' || pathname === '/sse')) {
       res.writeHead(200, {
         ...corsHeaders(),
@@ -452,10 +593,8 @@ const server = http.createServer(async (req, res) => {
       const sessionId = createSession(res);
       const postPath = `/messages?sessionId=${encodeURIComponent(sessionId)}`;
 
-      // handshake hint for older SSE MCP clients
       writeSse(res, 'endpoint', postPath);
 
-      // keepalive
       const timer = setInterval(() => {
         if (!res.writableEnded) {
           res.write(': keepalive\n\n');
@@ -490,7 +629,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && pathname === '/manifest') {
       return sendJson(res, 200, {
         name: 'ai-dental-clinic-sender',
-        version: '0.1.0',
+        version: '0.2.1',
         tools: toolDefinitions()
       });
     }
@@ -517,4 +656,7 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, HOST, () => {
   console.log(`MCP SSE server listening on http://${HOST}:${PORT}`);
   console.log(`Sender base URL: ${SENDER_BASE_URL}`);
+  console.log(
+    `Warm config: attempts=${WARM_MAX_ATTEMPTS}, delayMs=${WARM_RETRY_DELAY_MS}, timeoutMs=${WARM_REQUEST_TIMEOUT_MS}`
+  );
 });
