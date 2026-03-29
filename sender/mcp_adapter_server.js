@@ -205,6 +205,194 @@ function normalizeTransformOutput(senderJson) {
   };
 }
 
+function buildInteraction(senderJson) {
+  const resultType = senderJson.result_type || 'technical_error';
+  const reasonCode = senderJson.reason_code || '';
+  const message = extractBestMessage(senderJson);
+
+  if (resultType === 'success') {
+    return {
+      mode: 'inform',
+      ui_kind: 'success',
+      user_message: `정상 처리되었습니다. ${message}`.trim(),
+      assistant_question: '',
+      required_user_input: null,
+      do_not_ask: []
+    };
+  }
+
+  if (
+    resultType === 'correction_required' &&
+    reasonCode === 'SAME_DATE_EXISTING_VISIT_POSSIBLE_UPDATE'
+  ) {
+    return {
+      mode: 'ask_user',
+      ui_kind: 'confirmation',
+      user_message:
+        '같은 날짜에 이미 등록된 방문 기록이 있습니다. 지금 하려는 입력이 새 방문을 새로 등록하는 것인지, 아니면 이미 등록된 그 방문 기록에 내용을 이어서 추가/수정하는 것인지 확인이 필요합니다.',
+      assistant_question: '기존 기록에 이어서 수정/추가로 진행할까요?',
+      required_user_input: {
+        type: 'choice',
+        field: 'workflow.doctor_confirmed_correction',
+        choices: [
+          {
+            label: '기존 기록에 이어서 수정/추가',
+            value: 'confirm_existing_visit_update'
+          },
+          {
+            label: '새 방문으로 새로 등록 유지',
+            value: 'keep_new_visit_claim'
+          }
+        ]
+      },
+      do_not_ask: [
+        'patients.patient_id',
+        'visits.date',
+        'full_json',
+        'full_briefing',
+        'findings_reentry'
+      ]
+    };
+  }
+
+  if (
+    resultType === 'recheck_required' &&
+    reasonCode === 'PATIENT_NOT_FOUND_RECHECK_REQUIRED'
+  ) {
+    return {
+      mode: 'ask_user',
+      ui_kind: 'input',
+      user_message: '입력한 patient_id로는 기존 환자 기록을 찾지 못했습니다.',
+      assistant_question: '수정된 6자리 patient_id만 다시 입력해 주세요.',
+      required_user_input: {
+        type: 'patient_id',
+        field: 'patients.patient_id',
+        format: '6_digit_string'
+      },
+      do_not_ask: [
+        'visits.date',
+        'visits.chief_complaint',
+        'findings_reentry',
+        'full_json',
+        'full_briefing'
+      ]
+    };
+  }
+
+  if (
+    resultType === 'hard_stop' &&
+    reasonCode === 'PATIENT_NOT_FOUND_RECHECK_FAILED'
+  ) {
+    return {
+      mode: 'stop',
+      ui_kind: 'hard_stop',
+      user_message:
+        'patient_id를 다시 확인해도 기존 환자 기록을 찾지 못했습니다. 자동 진행을 중단합니다. 수동 확인이 필요합니다.',
+      assistant_question: '',
+      required_user_input: null,
+      do_not_ask: [
+        'patients.patient_id',
+        'full_json',
+        'full_briefing',
+        'retry'
+      ]
+    };
+  }
+
+  if (
+    resultType === 'hard_stop' &&
+    reasonCode === 'SAME_DATE_EXISTING_VISIT_KEEP_NEW_VISIT_CLAIM'
+  ) {
+    return {
+      mode: 'stop',
+      ui_kind: 'hard_stop',
+      user_message:
+        '같은 날짜에 이미 등록된 방문 기록이 있는데도 새 방문으로 새로 등록을 유지하려고 했기 때문에 자동 진행이 중단되었습니다. 수동 확인이 필요합니다.',
+      assistant_question: '',
+      required_user_input: null,
+      do_not_ask: [
+        'patients.patient_id',
+        'visits.date',
+        'full_json',
+        'full_briefing',
+        'retry'
+      ]
+    };
+  }
+
+  if (resultType === 'hard_stop') {
+    return {
+      mode: 'stop',
+      ui_kind: 'hard_stop',
+      user_message: message,
+      assistant_question: '',
+      required_user_input: null,
+      do_not_ask: [
+        'full_json',
+        'full_briefing',
+        'retry'
+      ]
+    };
+  }
+
+  return {
+    mode: 'inform',
+    ui_kind: 'info',
+    user_message: message,
+    assistant_question: '',
+    required_user_input: null,
+    do_not_ask: []
+  };
+}
+
+function buildResendPlan(senderJson) {
+  const resultType = senderJson.result_type || 'technical_error';
+  const reasonCode = senderJson.reason_code || '';
+
+  if (
+    resultType === 'correction_required' &&
+    reasonCode === 'SAME_DATE_EXISTING_VISIT_POSSIBLE_UPDATE'
+  ) {
+    return {
+      preserve_clinical_payload: true,
+      replace_fields: [],
+      set_fields_on_confirm_existing_visit_update: {
+        'workflow.visit_intent_claim': 'existing_visit_update',
+        'workflow.doctor_confirmed_correction': true,
+        'workflow.correction_applied': 'true',
+        'workflow.correction_case': 'same_date_existing_visit_possible_update',
+        'workflow.correction_source': 'sender_resend_after_correction_required'
+      },
+      set_fields_on_keep_new_visit_claim: {
+        'workflow.doctor_confirmed_correction': false
+      },
+      regenerate_fields: []
+    };
+  }
+
+  if (
+    resultType === 'recheck_required' &&
+    reasonCode === 'PATIENT_NOT_FOUND_RECHECK_REQUIRED'
+  ) {
+    return {
+      preserve_clinical_payload: true,
+      replace_fields: [
+        'patients.patient_id'
+      ],
+      set_fields: {
+        'workflow.patient_recheck_attempted': true
+      },
+      regenerate_fields: [
+        'visits.visit_id',
+        'findings_records[].visit_id',
+        'findings_records[].record_name'
+      ]
+    };
+  }
+
+  return null;
+}
+
 function normalizeSendOutput(senderJson) {
   return {
     ok: senderJson.status === 'SUCCESS',
@@ -249,6 +437,8 @@ function normalizeSendOutput(senderJson) {
       senderJson.transport && typeof senderJson.transport === 'object'
         ? senderJson.transport
         : {},
+    interaction: buildInteraction(senderJson),
+    resend_plan: buildResendPlan(senderJson),
     debug: senderJson.debug || {}
   };
 }
@@ -283,7 +473,7 @@ function toolDefinitions() {
     {
       name: 'sender_send',
       description:
-        'Transform canonical dental case JSON into sender-parity payload, send it to the configured Make webhook, and return normalized sender result fields including result_type, message, write_allowed, resend_allowed, reason_code, and parsed Make response.',
+        'Transform canonical dental case JSON into sender-parity payload, send it to the configured Make webhook, and return normalized sender result fields including interaction and resend_plan for consistent operational handling.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -502,7 +692,7 @@ async function handleRpc(sessionId, message) {
       },
       serverInfo: {
         name: 'ai-dental-clinic-sender',
-        version: '0.2.1'
+        version: '0.3.0'
       }
     });
   }
@@ -568,7 +758,7 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, {
         ok: true,
         service: 'ai-dental-clinic-mcp-sse-server',
-        version: '0.2.1',
+        version: '0.3.0',
         sender_base_url: SENDER_BASE_URL,
         warm_config: {
           max_attempts: WARM_MAX_ATTEMPTS,
@@ -629,7 +819,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && pathname === '/manifest') {
       return sendJson(res, 200, {
         name: 'ai-dental-clinic-sender',
-        version: '0.2.1',
+        version: '0.3.0',
         tools: toolDefinitions()
       });
     }
