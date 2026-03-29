@@ -24,7 +24,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { URL } = require('url');
 
-const HOST = process.env.MCP_SENDER_HOST || '127.0.0.1';
+const HOST = '0.0.0.0';
 const PORT = Number(process.env.PORT || process.env.MCP_SENDER_PORT || 8787);
 const WEBHOOK_URL = process.env.MCP_SENDER_WEBHOOK_URL || 'https://hook.eu1.make.com/38cx9ls57f7k3akd6us4hwchrtwfl050';
 const AUDIT_DIR = process.env.MCP_SENDER_AUDIT_DIR || path.join(process.cwd(), 'mcp_sender_audit');
