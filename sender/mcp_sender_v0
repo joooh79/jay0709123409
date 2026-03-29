@@ -1,1 +1,525 @@
+#!/usr/bin/env node
+'use strict';
 
+/**
+ * MCP Sender v0
+ *
+ * Minimal prototype server for AI Dental Clinic sender-role replacement testing.
+ *
+ * Features:
+ * - Accepts canonical JSON in either:
+ *   A) new findings_records[]-based form
+ *   B) legacy branch-section form (pre_op / radiographic / operative / diagnosis / treatment_plan / doctor_reasoning)
+ * - Normalizes into findings_records[] payload expected by current Make scenario interface
+ * - Optional send to Make webhook
+ * - Audit log per request
+ *
+ * No external dependencies.
+ */
+
+const http = require('http');
+const https = require('https');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const { URL } = require('url');
+
+const HOST = process.env.MCP_SENDER_HOST || '127.0.0.1';
+const PORT = Number(process.env.MCP_SENDER_PORT || 8787);
+const WEBHOOK_URL = process.env.MCP_SENDER_WEBHOOK_URL || 'https://hook.eu1.make.com/38cx9ls57f7k3akd6us4hwchrtwfl050';
+const AUDIT_DIR = process.env.MCP_SENDER_AUDIT_DIR || path.join(process.cwd(), 'mcp_sender_audit');
+const ENABLE_NETWORK_SEND = (process.env.MCP_SENDER_ENABLE_NETWORK_SEND || 'false').toLowerCase() === 'true';
+
+fs.mkdirSync(AUDIT_DIR, { recursive: true });
+
+const ALLOWED_MODES = new Set([
+  'new_patient_new_visit',
+  'existing_patient_new_visit',
+  'existing_visit_update'
+]);
+
+const BRANCH_DEFS = [
+  {
+    key: 'pre_op',
+    code: 'PRE',
+    label: 'Pre-op Clinical Findings',
+    recordField: 'record',
+    toothField: 'tooth_number',
+    valueMap: {
+      'Symptom': ['symptom_1', 'symptom_2', 'symptom_3', 'symptom_4'],
+      'Symptom reproducible': 'symptom_reproducible',
+      'Visible crack': 'visible_crack',
+      'Crack detection method': ['crack_detection_method_1', 'crack_detection_method_2', 'crack_detection_method_3'],
+      'Pulp - cold test': 'pulp_cold_test',
+      'Pulp - EPT': 'pulp_ept',
+      'Functional Cusp - involvement': 'functional_cusp_involvement',
+      'existing restorations': 'existing_restorations',
+      'Existing restoration size': 'existing_restoration_size',
+      'Occlusal wear': 'occlusal_wear',
+      'Structure estimation - suspected cusp thin?': 'structure_estimate_suspected_cusp_thin',
+      'Margin estimation - suspected subgingival margin': 'suspected_subgingival_margin',
+      'Rubber Dam Feasibility': 'rubber_dam_feasibility'
+    }
+  },
+  {
+    key: 'radiographic',
+    code: 'RAD',
+    label: 'Radiographic Findings',
+    recordField: 'record',
+    toothField: 'tooth_number',
+    valueMap: {
+      'Radiograph type': 'radiograph_type',
+      'Radiographic caries depth': 'radiographic_caries_depth',
+      'Secondary caries': 'secondary_caries',
+      'Caries location': ['caries_location_1', 'caries_location_2', 'caries_location_3'],
+      'Pulp chamber size': 'pulp_chamber_size',
+      'Periapical lesion': 'periapical_lesion',
+      'Radiographic fracture sign': 'radiographic_fracture_sign',
+      'Radiograph link': 'xray_link'
+    }
+  },
+  {
+    key: 'operative',
+    code: 'OP',
+    label: 'Operative Findings',
+    recordField: 'record',
+    toothField: 'tooth_number',
+    valueMap: {
+      'Rubber dam isolation': 'rubber_dam_isolation',
+      'Caries depth (actual)': 'caries_depth_actual',
+      'Soft dentin remaining': 'soft_dentin_remaining',
+      'Crack confirmed': 'crack_confirmed',
+      'Crack location': ['crack_location_1', 'crack_location_2', 'crack_location_3'],
+      'Remaining cusp thickness (mm)': 'remaining_cusp_thickness_mm',
+      'Subgingival margin': 'subgingival_margin',
+      'Deep marginal elevation': 'deep_margin_elevation',
+      'IDS/resin coating': 'ids_resin_coating',
+      'Resin core build up type': 'core_build_up',
+      'Occlusal loading test': 'occlusal_loading_test',
+      'Loading test result': 'loading_test_result',
+      'Intraoral photo link': 'intraoral_photo_link'
+    }
+  },
+  {
+    key: 'diagnosis',
+    code: 'DX',
+    label: 'Diagnosis',
+    recordField: 'record',
+    toothField: 'tooth_number',
+    valueMap: {
+      'Structural diagnosis': ['structural_diagnosis_1', 'structural_diagnosis_2', 'structural_diagnosis_3'],
+      'Pulp diagnosis': 'pulp_diagnosis',
+      'Crack severity': 'crack_severity',
+      'Occlusal risk': 'occlusal_risk',
+      'Restorability': 'restorability'
+    }
+  },
+  {
+    key: 'treatment_plan',
+    code: 'PLAN',
+    label: 'Treatment Plan',
+    recordField: 'record',
+    toothField: 'tooth_number',
+    valueMap: {
+      'Pulp therapy': 'pulp_therapy',
+      'Restoration design': 'restoration_design',
+      'Restoration material': 'restoration_material',
+      'Implant placement': 'implant_placement',
+      'Scan file link': 'scan_stl_link'
+    }
+  },
+  {
+    key: 'doctor_reasoning',
+    code: 'DR',
+    label: 'Doctor Reasoning',
+    recordField: 'record',
+    toothField: 'tooth_number',
+    valueMap: {
+      'Decision factor': ['decision_factor_1', 'decision_factor_2', 'decision_factor_3', 'decision_factor_4', 'decision_factor_5', 'decision_factor_6'],
+      'Remaining cusp thickness decision': 'remaining_cusp_thickness_decision',
+      'Functional cusp involvement': 'functional_cusp_involvement',
+      'Crack progression risk': 'crack_progression_risk',
+      'Occlusal risk': 'occlusal_risk',
+      'Reasoning notes': 'reasoning_notes'
+    }
+  }
+];
+
+function sha256(value) {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function isPlainObject(v) {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+function notBlank(v) {
+  return v !== '' && v !== null && v !== undefined;
+}
+
+function cleanArray(values) {
+  return values.filter(notBlank);
+}
+
+function addField(target, fieldName, sourceValue) {
+  if (Array.isArray(sourceValue)) {
+    const arr = cleanArray(sourceValue);
+    if (arr.length > 0) target[fieldName] = arr;
+    return;
+  }
+  if (typeof sourceValue === 'number') {
+    if (!Number.isNaN(sourceValue) && sourceValue !== 0) target[fieldName] = sourceValue;
+    return;
+  }
+  if (notBlank(sourceValue)) target[fieldName] = sourceValue;
+}
+
+function makeVisitId(patientId, date) {
+  if (!notBlank(patientId) || !notBlank(date)) return '';
+  return `VISIT-${patientId}-${String(date).replace(/-/g, '')}`;
+}
+
+function makeRecordName(visitId, toothNumber, branchCode) {
+  if (!notBlank(visitId) || !notBlank(toothNumber) || !notBlank(branchCode)) return '';
+  return `${visitId}-${toothNumber}-${branchCode}`;
+}
+
+function requireSections(payload) {
+  if (!isPlainObject(payload.workflow)) throw new Error("payload.workflow missing or invalid");
+  if (!isPlainObject(payload.patients)) throw new Error("payload.patients missing or invalid");
+  if (!isPlainObject(payload.visits)) throw new Error("payload.visits missing or invalid");
+}
+
+function validateWorkflow(workflow) {
+  if (!ALLOWED_MODES.has(workflow.mode)) {
+    throw new Error(`Invalid workflow.mode: ${workflow.mode}`);
+  }
+}
+
+function validateBaseFields(payload) {
+  if (!notBlank(payload.patients.patient_id)) throw new Error('patients.patient_id required');
+  if (!notBlank(payload.visits.date)) throw new Error('visits.date required');
+}
+
+function isFindingsRecordsShape(payload) {
+  return Array.isArray(payload.findings_records) && isPlainObject(payload.findings_present);
+}
+
+function buildLegacyFindingsRecords(payload) {
+  const patientId = payload.patients.patient_id;
+  const date = payload.visits.date;
+  const visitId = payload.visits.visit_id || makeVisitId(patientId, date);
+  const findingsRecords = [];
+  const findingsPresent = {
+    pre_op: false,
+    radiographic: false,
+    operative: false,
+    diagnosis: false,
+    treatment_plan: false,
+    doctor_reasoning: false
+  };
+
+  for (const branch of BRANCH_DEFS) {
+    const section = payload[branch.key];
+    if (!isPlainObject(section)) continue;
+
+    const fields = {};
+    for (const [fieldName, source] of Object.entries(branch.valueMap)) {
+      if (Array.isArray(source)) {
+        addField(fields, fieldName, source.map((k) => section[k]));
+      } else if (source === 'remaining_cusp_thickness_mm') {
+        const n = Number(section[source]);
+        addField(fields, fieldName, Number.isNaN(n) ? '' : n);
+      } else {
+        addField(fields, fieldName, section[source]);
+      }
+    }
+
+    const toothNumber = section[branch.toothField] || '';
+    const recordName = section[branch.recordField] || makeRecordName(visitId, toothNumber, branch.code);
+
+    if (notBlank(recordName)) fields['Record name'] = recordName;
+    if (notBlank(visitId)) fields['Visit ID'] = visitId;
+    if (notBlank(toothNumber)) fields['Tooth number'] = toothNumber;
+
+    if (Object.keys(fields).length === 0) continue;
+
+    findingsPresent[branch.key] = true;
+    findingsRecords.push({
+      branch_key: branch.key,
+      branch_code: branch.code,
+      branch_label: branch.label,
+      visit_id: visitId,
+      tooth_number: toothNumber,
+      record_name: recordName,
+      fields
+    });
+  }
+
+  if (findingsRecords.length === 0) {
+    throw new Error('At least one finding section must contain real data');
+  }
+
+  return {
+    workflow: {
+      mode: payload.workflow.mode,
+      patient_status_claim: payload.workflow.patient_status_claim || '',
+      visit_intent_claim: payload.workflow.visit_intent_claim || '',
+      target_visit_date: payload.workflow.target_visit_date || '',
+      target_visit_id: payload.workflow.target_visit_id || '',
+      target_visit_clue: payload.workflow.target_visit_clue || '',
+      uncertainty_note: payload.workflow.uncertainty_note || '',
+      correction_applied: payload.workflow.correction_applied || '',
+      correction_case: payload.workflow.correction_case || '',
+      doctor_confirmed_correction: payload.workflow.doctor_confirmed_correction ?? '',
+      correction_source: payload.workflow.correction_source || '',
+      patient_recheck_attempted: payload.workflow.patient_recheck_attempted ?? ''
+    },
+    patients: {
+      patient_id: payload.patients.patient_id,
+      birth_year: String(payload.patients.birth_year ?? ''),
+      gender: payload.patients.gender || '',
+      last_dental_visit_date: payload.patients.last_dental_visit_date || ''
+    },
+    visits: {
+      visit_id: visitId,
+      date,
+      visit_type: payload.visits.visit_type || '',
+      chief_complaint: payload.visits.chief_complaint || '',
+      pain_level: Number(payload.visits.pain_level || 0)
+    },
+    findings_present: findingsPresent,
+    findings_records: findingsRecords,
+    record_name_rule: payload.record_name_rule || '',
+    record_name_generation_source: payload.record_name_generation_source || ''
+  };
+}
+
+function normalizeFindingsRecordsPayload(payload) {
+  requireSections(payload);
+  validateWorkflow(payload.workflow);
+  validateBaseFields(payload);
+
+  if (isFindingsRecordsShape(payload)) {
+    if (payload.findings_records.length === 0) {
+      throw new Error('findings_records must not be empty');
+    }
+    return {
+      workflow: {
+        mode: payload.workflow.mode,
+        patient_status_claim: payload.workflow.patient_status_claim || '',
+        visit_intent_claim: payload.workflow.visit_intent_claim || '',
+        target_visit_date: payload.workflow.target_visit_date || '',
+        target_visit_id: payload.workflow.target_visit_id || '',
+        target_visit_clue: payload.workflow.target_visit_clue || '',
+        uncertainty_note: payload.workflow.uncertainty_note || '',
+        correction_applied: payload.workflow.correction_applied || '',
+        correction_case: payload.workflow.correction_case || '',
+        doctor_confirmed_correction: payload.workflow.doctor_confirmed_correction ?? '',
+        correction_source: payload.workflow.correction_source || '',
+        patient_recheck_attempted: payload.workflow.patient_recheck_attempted ?? ''
+      },
+      patients: {
+        patient_id: payload.patients.patient_id,
+        birth_year: String(payload.patients.birth_year ?? ''),
+        gender: payload.patients.gender || '',
+        last_dental_visit_date: payload.patients.last_dental_visit_date || ''
+      },
+      visits: {
+        visit_id: payload.visits.visit_id || makeVisitId(payload.patients.patient_id, payload.visits.date),
+        date: payload.visits.date,
+        visit_type: payload.visits.visit_type || '',
+        chief_complaint: payload.visits.chief_complaint || '',
+        pain_level: Number(payload.visits.pain_level || 0)
+      },
+      findings_present: payload.findings_present,
+      findings_records: payload.findings_records,
+      record_name_rule: payload.record_name_rule || '',
+      record_name_generation_source: payload.record_name_generation_source || ''
+    };
+  }
+
+  return buildLegacyFindingsRecords(payload);
+}
+
+function parseJsonBody(req) {
+  return new Promise((resolve, reject) => {
+    let data = '';
+    req.on('data', (chunk) => {
+      data += chunk;
+      if (data.length > 5 * 1024 * 1024) {
+        reject(new Error('Body too large'));
+        req.destroy();
+      }
+    });
+    req.on('end', () => {
+      try {
+        resolve(data ? JSON.parse(data) : {});
+      } catch (error) {
+        reject(error);
+      }
+    });
+    req.on('error', reject);
+  });
+}
+
+function postJson(urlString, body) {
+  return new Promise((resolve, reject) => {
+    const url = new URL(urlString);
+    const data = JSON.stringify(body);
+    const options = {
+      method: 'POST',
+      hostname: url.hostname,
+      port: url.port || (url.protocol === 'https:' ? 443 : 80),
+      path: `${url.pathname}${url.search}`,
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(data)
+      }
+    };
+    const transport = url.protocol === 'https:' ? https : http;
+    const request = transport.request(options, (response) => {
+      let responseData = '';
+      response.on('data', (chunk) => { responseData += chunk; });
+      response.on('end', () => {
+        resolve({
+          statusCode: response.statusCode || 0,
+          headers: response.headers,
+          bodyText: responseData
+        });
+      });
+    });
+    request.on('error', reject);
+    request.write(data);
+    request.end();
+  });
+}
+
+function writeAudit(record) {
+  const filename = `${record.timestamp.replace(/[:.]/g, '-')}_${record.request_id}.json`;
+  fs.writeFileSync(path.join(AUDIT_DIR, filename), JSON.stringify(record, null, 2));
+}
+
+function sendJson(res, statusCode, body) {
+  const data = JSON.stringify(body, null, 2);
+  res.writeHead(statusCode, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Content-Length': Buffer.byteLength(data)
+  });
+  res.end(data);
+}
+
+function normalizeEnvelope(requestBody) {
+  if (isPlainObject(requestBody.payload)) {
+    return {
+      request_id: requestBody.request_id || crypto.randomUUID(),
+      timestamp: requestBody.timestamp || nowIso(),
+      source: requestBody.source || 'CPL_AI',
+      payload: requestBody.payload,
+      mode: requestBody.mode || 'transform'
+    };
+  }
+
+  return {
+    request_id: requestBody.request_id || crypto.randomUUID(),
+    timestamp: requestBody.timestamp || nowIso(),
+    source: requestBody.source || 'CPL_AI',
+    payload: requestBody,
+    mode: requestBody.mode || 'transform'
+  };
+}
+
+const server = http.createServer(async (req, res) => {
+  try {
+    if (req.method === 'GET' && req.url === '/health') {
+      return sendJson(res, 200, {
+        ok: true,
+        service: 'mcp-sender-v0',
+        version: '0.1.0',
+        enable_network_send: ENABLE_NETWORK_SEND,
+        webhook_url: WEBHOOK_URL
+      });
+    }
+
+    if (req.method === 'POST' && (req.url === '/transform' || req.url === '/send')) {
+      const envelope = normalizeEnvelope(await parseJsonBody(req));
+      const normalizedPayload = normalizeFindingsRecordsPayload(envelope.payload);
+      const transformedHash = sha256(JSON.stringify(normalizedPayload));
+      const inputHash = sha256(JSON.stringify(envelope.payload));
+
+      let transportResult = null;
+      let status = 'SUCCESS';
+      let stage = 'COMPLETED';
+
+      if (req.url === '/send') {
+        if (!ENABLE_NETWORK_SEND) {
+          status = 'FAILED';
+          stage = 'TRANSPORT';
+          transportResult = {
+            statusCode: 0,
+            bodyText: 'Network send disabled. Set MCP_SENDER_ENABLE_NETWORK_SEND=true to allow live webhook POST.'
+          };
+        } else {
+          transportResult = await postJson(WEBHOOK_URL, normalizedPayload);
+          if (transportResult.statusCode < 200 || transportResult.statusCode >= 300) {
+            status = 'FAILED';
+            stage = 'TRANSPORT';
+          }
+        }
+      }
+
+      const responseBody = {
+        request_id: envelope.request_id,
+        status,
+        stage,
+        input_hash: inputHash,
+        transformed_hash: transformedHash,
+        transformed_payload: normalizedPayload,
+        transport: transportResult,
+        debug: {
+          validation_passed: true,
+          contract_valid: true,
+          transformation_applied: true,
+          webhook_sent: req.url === '/send' && ENABLE_NETWORK_SEND && status === 'SUCCESS'
+        }
+      };
+
+      writeAudit({
+        request_id: envelope.request_id,
+        timestamp: envelope.timestamp,
+        source: envelope.source,
+        endpoint: req.url,
+        input_hash: inputHash,
+        transformed_hash: transformedHash,
+        payload: envelope.payload,
+        transformed_payload: normalizedPayload,
+        transport: transportResult,
+        status,
+        stage
+      });
+
+      return sendJson(res, 200, responseBody);
+    }
+
+    sendJson(res, 404, {
+      error: 'Not found',
+      endpoints: ['GET /health', 'POST /transform', 'POST /send']
+    });
+  } catch (error) {
+    return sendJson(res, 400, {
+      status: 'REJECTED',
+      stage: 'VALIDATION',
+      error: error.message
+    });
+  }
+});
+
+server.listen(PORT, HOST, () => {
+  console.log(`MCP Sender v0 listening on http://${HOST}:${PORT}`);
+  console.log(`Audit directory: ${AUDIT_DIR}`);
+  console.log(`Network send enabled: ${ENABLE_NETWORK_SEND}`);
+});
