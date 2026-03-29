@@ -1,1 +1,148 @@
-
+{
+  "name": "ai-dental-clinic-sender",
+  "version": "0.1.0",
+  "description": "AI Dental Clinic sender MCP server for canonical JSON transform and Make webhook delivery.",
+  "server": {
+    "baseUrl": "https://YOUR-MCP-SERVER-BASE-URL",
+    "transport": "http"
+  },
+  "tools": [
+    {
+      "name": "sender_health",
+      "title": "Sender Health Check",
+      "description": "Check sender service health and basic runtime configuration.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": { "type": "boolean" },
+          "service": { "type": "string" },
+          "version": { "type": "string" },
+          "enable_network_send": { "type": "boolean" },
+          "webhook_url": { "type": "string" }
+        },
+        "required": ["ok", "service"]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "idempotentHint": true
+      }
+    },
+    {
+      "name": "sender_transform",
+      "title": "Transform Canonical JSON",
+      "description": "Transform canonical dental case JSON into sender-parity payload for preview and validation. Does not execute downstream write.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "payload": {
+            "type": "object",
+            "description": "Canonical sender input payload"
+          }
+        },
+        "required": ["payload"],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": { "type": "boolean" },
+          "tool": { "type": "string" },
+          "request_id": { "type": "string" },
+          "status": { "type": "string" },
+          "stage": { "type": "string" },
+          "input_hash": { "type": "string" },
+          "transformed_hash": { "type": "string" },
+          "transformed_payload": { "type": "object" },
+          "debug": { "type": "object" }
+        },
+        "required": [
+          "ok",
+          "tool",
+          "request_id",
+          "status",
+          "stage",
+          "transformed_payload"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "idempotentHint": true
+      }
+    },
+    {
+      "name": "sender_send",
+      "title": "Send Canonical JSON",
+      "description": "Transform canonical dental case JSON into sender-parity payload, send it to the configured Make webhook, and return normalized sender result fields including result_type, message, write_allowed, resend_allowed, reason_code, and parsed Make response.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "payload": {
+            "type": "object",
+            "description": "Canonical sender input payload"
+          }
+        },
+        "required": ["payload"],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": { "type": "boolean" },
+          "tool": { "type": "string" },
+          "request_id": { "type": "string" },
+          "status": { "type": "string" },
+          "stage": { "type": "string" },
+          "result_type": {
+            "type": "string",
+            "enum": [
+              "success",
+              "correction_required",
+              "recheck_required",
+              "hard_stop",
+              "technical_error"
+            ]
+          },
+          "message": { "type": "string" },
+          "write_allowed": { "type": ["boolean", "null"] },
+          "resend_allowed": { "type": ["boolean", "null"] },
+          "reason_code": { "type": "string" },
+          "make_status": { "type": "string" },
+          "gate_result": { "type": "string" },
+          "data": {
+            "type": "object",
+            "properties": {
+              "same_date_visit_exists": { "type": ["boolean", "null"] },
+              "suggested_correction": { "type": ["object", "null"] }
+            },
+            "additionalProperties": true
+          },
+          "input_hash": { "type": "string" },
+          "transformed_hash": { "type": "string" },
+          "transformed_payload": { "type": "object" },
+          "make_response_raw": { "type": "string" },
+          "make_response_parsed": { "type": ["object", "null"] },
+          "transport": { "type": "object" },
+          "debug": { "type": "object" }
+        },
+        "required": [
+          "ok",
+          "tool",
+          "request_id",
+          "status",
+          "stage",
+          "result_type",
+          "message"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "idempotentHint": false
+      }
+    }
+  ]
+}
