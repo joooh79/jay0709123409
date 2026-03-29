@@ -4,7 +4,7 @@
 /**
  * MCP Sender v0
  *
- * findings_records parity patch + Make response surfacing
+ * findings_records parity patch + Make response surfacing + sender result_type
  *
  * Goal:
  * - Keep current Make scenario unchanged
@@ -12,6 +12,7 @@
  * - Accept findings_records-based canonical sender input
  * - Match current sender.html outbound preview behavior
  * - Surface Make webhook response fields directly in MCP /send output
+ * - Add sender-side normalized result_type for UI/client branching
  *
  * Endpoints:
  * - GET /health
@@ -214,7 +215,6 @@ function normalizeFindingsRecordsPayload(payload) {
     },
 
     findings_present: payload.findings_present,
-
     findings_records: payload.findings_records,
 
     record_name_rule:
@@ -283,13 +283,37 @@ function buildMakeResponseSurface(transportResult) {
   };
 }
 
+function buildSenderResultType(status, stage, makeSurfaced) {
+  if (status !== 'SUCCESS' || stage === 'TRANSPORT') {
+    return 'technical_error';
+  }
+
+  if (makeSurfaced.hard_stop === true || makeSurfaced.gate_result === 'hard_stop') {
+    return 'hard_stop';
+  }
+
+  if (makeSurfaced.reason_code === 'PATIENT_NOT_FOUND_RECHECK_REQUIRED') {
+    return 'recheck_required';
+  }
+
+  if (makeSurfaced.gate_result === 'correction_required') {
+    return 'correction_required';
+  }
+
+  if (makeSurfaced.gate_result === 'normal_pass' && makeSurfaced.write_allowed === true) {
+    return 'success';
+  }
+
+  return 'technical_error';
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     if (req.method === 'GET' && req.url === '/health') {
       return sendJson(res, 200, {
         ok: true,
         service: 'mcp-sender-v0',
-        version: '0.3.0-findings-records-parity-make-response',
+        version: '0.4.0-findings-records-parity-make-response-result-type',
         enable_network_send: ENABLE_NETWORK_SEND,
         webhook_url: WEBHOOK_URL
       });
@@ -364,11 +388,14 @@ const server = http.createServer(async (req, res) => {
       }
 
       const makeSurface = buildMakeResponseSurface(transportResult);
+      const resultType = buildSenderResultType(status, stage, makeSurface.surfaced);
 
       const responseBody = {
         request_id: envelope.request_id,
         status,
         stage,
+        result_type: resultType,
+
         input_hash: inputHash,
         transformed_hash: transformedHash,
         transformed_payload: transformedPayload,
@@ -412,6 +439,7 @@ const server = http.createServer(async (req, res) => {
         make_response_raw: makeSurface.make_response_raw,
         make_response_parsed: makeSurface.make_response_parsed,
         surfaced_make_fields: makeSurface.surfaced,
+        result_type: resultType,
         status,
         stage
       });
@@ -427,6 +455,7 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 400, {
       status: 'REJECTED',
       stage: 'VALIDATION',
+      result_type: 'technical_error',
       error: error.message
     });
   }
@@ -438,4 +467,5 @@ server.listen(PORT, HOST, () => {
   console.log(`Network send enabled: ${ENABLE_NETWORK_SEND}`);
   console.log(`Parity mode: findings_records`);
   console.log(`Make response surfacing: enabled`);
+  console.log(`Sender result_type: enabled`);
 });
