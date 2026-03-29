@@ -3,12 +3,15 @@
 
 const http = require('http');
 const https = require('https');
+const crypto = require('crypto');
 const { URL } = require('url');
 
 const HOST = '0.0.0.0';
 const PORT = Number(process.env.PORT || process.env.MCP_ADAPTER_PORT || 8790);
 const SENDER_BASE_URL =
   process.env.SENDER_BASE_URL || 'http://127.0.0.1:8787';
+
+const sessions = new Map();
 
 function corsHeaders() {
   return {
@@ -28,9 +31,19 @@ function sendJson(res, statusCode, body) {
   res.end(data);
 }
 
-function sendNoContent(res, statusCode = 204) {
+function sendText(res, statusCode, text, contentType = 'text/plain; charset=utf-8') {
   res.writeHead(statusCode, {
-    ...corsHeaders()
+    ...corsHeaders(),
+    'Content-Type': contentType,
+    'Content-Length': Buffer.byteLength(text)
+  });
+  res.end(text);
+}
+
+function sendNoContent(res, statusCode = 204, extraHeaders = {}) {
+  res.writeHead(statusCode, {
+    ...corsHeaders(),
+    ...extraHeaders
   });
   res.end();
 }
@@ -193,60 +206,50 @@ function normalizeSendOutput(senderJson) {
   };
 }
 
-function manifest() {
-  return {
-    name: 'ai-dental-clinic-sender',
-    version: '0.1.0',
-    description:
-      'AI Dental Clinic sender MCP adapter for canonical JSON transform and Make delivery.',
-    tools: [
-      {
-        name: 'sender_health',
-        title: 'Sender Health Check',
-        description:
-          'Check sender service health and basic runtime configuration.',
-        inputSchema: {
-          type: 'object',
-          properties: {},
-          additionalProperties: false
-        }
-      },
-      {
-        name: 'sender_transform',
-        title: 'Transform Canonical JSON',
-        description:
-          'Transform canonical dental case JSON into sender-parity payload for preview and validation. Does not execute downstream write.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            payload: {
-              type: 'object',
-              description: 'Canonical sender input payload'
-            }
-          },
-          required: ['payload'],
-          additionalProperties: false
-        }
-      },
-      {
-        name: 'sender_send',
-        title: 'Send Canonical JSON',
-        description:
-          'Transform canonical dental case JSON into sender-parity payload, send it to the configured Make webhook, and return normalized sender result fields including result_type, message, write_allowed, resend_allowed, reason_code, and parsed Make response.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            payload: {
-              type: 'object',
-              description: 'Canonical sender input payload'
-            }
-          },
-          required: ['payload'],
-          additionalProperties: false
-        }
+function toolDefinitions() {
+  return [
+    {
+      name: 'sender_health',
+      description: 'Check sender service health and basic runtime configuration.',
+      inputSchema: {
+        type: 'object',
+        properties: {},
+        additionalProperties: false
       }
-    ]
-  };
+    },
+    {
+      name: 'sender_transform',
+      description:
+        'Transform canonical dental case JSON into sender-parity payload for preview and validation. Does not execute downstream write.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          payload: {
+            type: 'object',
+            description: 'Canonical sender input payload'
+          }
+        },
+        required: ['payload'],
+        additionalProperties: false
+      }
+    },
+    {
+      name: 'sender_send',
+      description:
+        'Transform canonical dental case JSON into sender-parity payload, send it to the configured Make webhook, and return normalized sender result fields including result_type, message, write_allowed, resend_allowed, reason_code, and parsed Make response.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          payload: {
+            type: 'object',
+            description: 'Canonical sender input payload'
+          }
+        },
+        required: ['payload'],
+        additionalProperties: false
+      }
+    }
+  ];
 }
 
 async function handleToolCall(toolName, args) {
@@ -295,6 +298,126 @@ async function handleToolCall(toolName, args) {
   throw new Error(`Unknown tool: ${toolName}`);
 }
 
+function createSession(res) {
+  const sessionId = crypto.randomUUID();
+
+  sessions.set(sessionId, {
+    id: sessionId,
+    res,
+    createdAt: Date.now()
+  });
+
+  res.on('close', () => {
+    sessions.delete(sessionId);
+  });
+
+  return sessionId;
+}
+
+function writeSse(res, event, data) {
+  if (event) {
+    res.write(`event: ${event}\n`);
+  }
+
+  const payload =
+    typeof data === 'string' ? data : JSON.stringify(data);
+
+  for (const line of String(payload).split('\n')) {
+    res.write(`data: ${line}\n`);
+  }
+
+  res.write('\n');
+}
+
+function sendRpcResult(sessionId, id, result) {
+  const session = sessions.get(sessionId);
+  if (!session) return;
+
+  writeSse(session.res, 'message', {
+    jsonrpc: '2.0',
+    id,
+    result
+  });
+}
+
+function sendRpcError(sessionId, id, code, message) {
+  const session = sessions.get(sessionId);
+  if (!session) return;
+
+  writeSse(session.res, 'message', {
+    jsonrpc: '2.0',
+    id: id ?? null,
+    error: {
+      code,
+      message
+    }
+  });
+}
+
+async function handleRpc(sessionId, message) {
+  const id = Object.prototype.hasOwnProperty.call(message, 'id')
+    ? message.id
+    : null;
+  const method = message.method;
+  const params = message.params || {};
+
+  if (method === 'initialize') {
+    return sendRpcResult(sessionId, id, {
+      protocolVersion: '2024-11-05',
+      capabilities: {
+        tools: {
+          listChanged: false
+        }
+      },
+      serverInfo: {
+        name: 'ai-dental-clinic-sender',
+        version: '0.1.0'
+      }
+    });
+  }
+
+  if (method === 'notifications/initialized') {
+    return;
+  }
+
+  if (method === 'ping') {
+    return sendRpcResult(sessionId, id, {});
+  }
+
+  if (method === 'tools/list') {
+    return sendRpcResult(sessionId, id, {
+      tools: toolDefinitions()
+    });
+  }
+
+  if (method === 'tools/call') {
+    try {
+      const toolName = params.name;
+      const args = params.arguments || {};
+
+      if (typeof toolName !== 'string' || !toolName) {
+        return sendRpcError(sessionId, id, -32602, 'Tool name is required');
+      }
+
+      const result = await handleToolCall(toolName, args);
+
+      return sendRpcResult(sessionId, id, {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(result, null, 2)
+          }
+        ],
+        structuredContent: result
+      });
+    } catch (error) {
+      return sendRpcError(sessionId, id, -32000, error.message || 'Tool call failed');
+    }
+  }
+
+  return sendRpcError(sessionId, id, -32601, `Method not found: ${method}`);
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     const requestUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
@@ -304,47 +427,71 @@ const server = http.createServer(async (req, res) => {
       return sendNoContent(res, 204);
     }
 
-    if (req.method === 'HEAD' && (pathname === '/' || pathname === '/manifest' || pathname === '/.well-known/mcp')) {
-      return sendNoContent(res, 200);
-    }
-
     if (req.method === 'GET' && pathname === '/health') {
       return sendJson(res, 200, {
         ok: true,
-        service: 'ai-dental-clinic-mcp-adapter',
-        version: '0.1.1',
+        service: 'ai-dental-clinic-mcp-sse-server',
+        version: '0.2.0',
         sender_base_url: SENDER_BASE_URL
       });
     }
 
-    if (req.method === 'GET' && (pathname === '/' || pathname === '/manifest' || pathname === '/.well-known/mcp')) {
-      return sendJson(res, 200, manifest());
+    // MCP SSE endpoint: root path itself
+    if (req.method === 'GET' && (pathname === '/' || pathname === '/sse')) {
+      res.writeHead(200, {
+        ...corsHeaders(),
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive'
+      });
+
+      if (typeof res.flushHeaders === 'function') {
+        res.flushHeaders();
+      }
+
+      const sessionId = createSession(res);
+      const postPath = `/messages?sessionId=${encodeURIComponent(sessionId)}`;
+
+      // handshake hint for older SSE MCP clients
+      writeSse(res, 'endpoint', postPath);
+
+      // keepalive
+      const timer = setInterval(() => {
+        if (!res.writableEnded) {
+          res.write(': keepalive\n\n');
+        }
+      }, 15000);
+
+      res.on('close', () => {
+        clearInterval(timer);
+      });
+
+      return;
     }
 
-    if (req.method === 'POST' && pathname === '/tools/list') {
-      return sendJson(res, 200, { tools: manifest().tools });
-    }
+    if (req.method === 'POST' && pathname === '/messages') {
+      const sessionId = requestUrl.searchParams.get('sessionId');
 
-    if (req.method === 'POST' && pathname === '/tools/call') {
-      const body = await parseJsonBody(req);
-      requireObject(body, 'body');
-
-      const toolName = body.name;
-      const args = body.arguments || {};
-
-      if (typeof toolName !== 'string' || !toolName) {
+      if (!sessionId || !sessions.has(sessionId)) {
         return sendJson(res, 400, {
           ok: false,
-          error: 'Tool name is required'
+          error: 'Invalid or missing sessionId'
         });
       }
 
-      const result = await handleToolCall(toolName, args);
+      const body = await parseJsonBody(req);
+      requireObject(body, 'body');
 
+      await handleRpc(sessionId, body);
+
+      return sendNoContent(res, 202);
+    }
+
+    if (req.method === 'GET' && pathname === '/manifest') {
       return sendJson(res, 200, {
-        ok: true,
-        tool: toolName,
-        result
+        name: 'ai-dental-clinic-sender',
+        version: '0.1.0',
+        tools: toolDefinitions()
       });
     }
 
@@ -353,12 +500,10 @@ const server = http.createServer(async (req, res) => {
       error: 'Not found',
       endpoints: [
         'GET /',
-        'HEAD /',
+        'GET /sse',
+        'POST /messages?sessionId=...',
         'GET /health',
-        'GET /manifest',
-        'GET /.well-known/mcp',
-        'POST /tools/list',
-        'POST /tools/call'
+        'GET /manifest'
       ]
     });
   } catch (error) {
@@ -370,6 +515,6 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(`MCP adapter listening on http://${HOST}:${PORT}`);
+  console.log(`MCP SSE server listening on http://${HOST}:${PORT}`);
   console.log(`Sender base URL: ${SENDER_BASE_URL}`);
 });
