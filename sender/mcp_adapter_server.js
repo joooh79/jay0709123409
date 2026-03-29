@@ -1,22 +1,6 @@
 #!/usr/bin/env node
 'use strict';
 
-/**
- * AI Dental Clinic MCP Adapter Server
- *
- * Thin MCP adapter over existing sender HTTP service.
- *
- * Exposes tools:
- * - sender_health
- * - sender_transform
- * - sender_send
- *
- * Assumes underlying sender server provides:
- * - GET  /health
- * - POST /transform
- * - POST /send
- */
-
 const http = require('http');
 const https = require('https');
 const { URL } = require('url');
@@ -26,13 +10,29 @@ const PORT = Number(process.env.PORT || process.env.MCP_ADAPTER_PORT || 8790);
 const SENDER_BASE_URL =
   process.env.SENDER_BASE_URL || 'http://127.0.0.1:8787';
 
+function corsHeaders() {
+  return {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS, HEAD',
+    'Access-Control-Allow-Headers': 'Content-Type, Accept, Authorization'
+  };
+}
+
 function sendJson(res, statusCode, body) {
   const data = JSON.stringify(body, null, 2);
   res.writeHead(statusCode, {
+    ...corsHeaders(),
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(data)
   });
   res.end(data);
+}
+
+function sendNoContent(res, statusCode = 204) {
+  res.writeHead(statusCode, {
+    ...corsHeaders()
+  });
+  res.end();
 }
 
 function parseJsonBody(req) {
@@ -171,7 +171,8 @@ function normalizeSendOutput(senderJson) {
           ? senderJson.same_date_visit_exists
           : null,
       suggested_correction:
-        senderJson.suggested_correction && typeof senderJson.suggested_correction === 'object'
+        senderJson.suggested_correction &&
+        typeof senderJson.suggested_correction === 'object'
           ? senderJson.suggested_correction
           : null
     },
@@ -180,7 +181,8 @@ function normalizeSendOutput(senderJson) {
     transformed_payload: senderJson.transformed_payload || {},
     make_response_raw: senderJson.make_response_raw || '',
     make_response_parsed:
-      senderJson.make_response_parsed && typeof senderJson.make_response_parsed === 'object'
+      senderJson.make_response_parsed &&
+      typeof senderJson.make_response_parsed === 'object'
         ? senderJson.make_response_parsed
         : null,
     transport:
@@ -295,24 +297,35 @@ async function handleToolCall(toolName, args) {
 
 const server = http.createServer(async (req, res) => {
   try {
-    if (req.method === 'GET' && req.url === '/health') {
+    const requestUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    const pathname = requestUrl.pathname;
+
+    if (req.method === 'OPTIONS') {
+      return sendNoContent(res, 204);
+    }
+
+    if (req.method === 'HEAD' && (pathname === '/' || pathname === '/manifest' || pathname === '/.well-known/mcp')) {
+      return sendNoContent(res, 200);
+    }
+
+    if (req.method === 'GET' && pathname === '/health') {
       return sendJson(res, 200, {
         ok: true,
         service: 'ai-dental-clinic-mcp-adapter',
-        version: '0.1.0',
+        version: '0.1.1',
         sender_base_url: SENDER_BASE_URL
       });
     }
 
-    if (req.method === 'GET' && req.url === '/manifest') {
+    if (req.method === 'GET' && (pathname === '/' || pathname === '/manifest' || pathname === '/.well-known/mcp')) {
       return sendJson(res, 200, manifest());
     }
 
-    if (req.method === 'POST' && req.url === '/tools/list') {
+    if (req.method === 'POST' && pathname === '/tools/list') {
       return sendJson(res, 200, { tools: manifest().tools });
     }
 
-    if (req.method === 'POST' && req.url === '/tools/call') {
+    if (req.method === 'POST' && pathname === '/tools/call') {
       const body = await parseJsonBody(req);
       requireObject(body, 'body');
 
@@ -339,8 +352,11 @@ const server = http.createServer(async (req, res) => {
       ok: false,
       error: 'Not found',
       endpoints: [
+        'GET /',
+        'HEAD /',
         'GET /health',
         'GET /manifest',
+        'GET /.well-known/mcp',
         'POST /tools/list',
         'POST /tools/call'
       ]
