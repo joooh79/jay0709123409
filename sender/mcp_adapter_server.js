@@ -393,6 +393,138 @@ function buildResendPlan(senderJson) {
   return null;
 }
 
+function buildExecutionContract(senderJson) {
+  const resultType = senderJson.result_type || 'technical_error';
+  const reasonCode = senderJson.reason_code || '';
+  const message = extractBestMessage(senderJson);
+
+  if (resultType === 'success') {
+    return {
+      contract_version: '1.0',
+      mode: 'complete',
+      must_show_message: true,
+      user_visible_message: `정상 처리되었습니다. ${message}`.trim(),
+      must_ask_user: false,
+      user_question: '',
+      accepted_input_type: null,
+      allowed_actions: ['finish'],
+      forbidden_actions: [
+        'ask_full_json_again',
+        'ask_full_briefing_again',
+        'ask_findings_again'
+      ],
+      auto_resend_allowed: false,
+      stop_after_response: true
+    };
+  }
+
+  if (
+    resultType === 'correction_required' &&
+    reasonCode === 'SAME_DATE_EXISTING_VISIT_POSSIBLE_UPDATE'
+  ) {
+    return {
+      contract_version: '1.0',
+      mode: 'await_user_choice',
+      must_show_message: true,
+      user_visible_message:
+        '같은 날짜에 이미 등록된 방문 기록이 있습니다. 지금 하려는 입력이 새 방문을 새로 등록하는 것인지, 아니면 이미 등록된 그 방문 기록에 내용을 이어서 추가/수정하는 것인지 확인이 필요합니다.',
+      must_ask_user: true,
+      user_question: '기존 기록에 이어서 수정/추가로 진행할까요?',
+      accepted_input_type: 'choice',
+      accepted_choices: [
+        {
+          label: '기존 기록에 이어서 수정/추가',
+          value: 'confirm_existing_visit_update'
+        },
+        {
+          label: '새 방문으로 새로 등록 유지',
+          value: 'keep_new_visit_claim'
+        }
+      ],
+      allowed_actions: [
+        'ask_single_confirmation_question',
+        'patch_previous_payload',
+        'resend_after_user_answer'
+      ],
+      forbidden_actions: [
+        'ask_patient_id_again',
+        'ask_full_json_again',
+        'ask_full_briefing_again',
+        'ask_findings_again'
+      ],
+      auto_resend_allowed: false,
+      stop_after_response: false
+    };
+  }
+
+  if (
+    resultType === 'recheck_required' &&
+    reasonCode === 'PATIENT_NOT_FOUND_RECHECK_REQUIRED'
+  ) {
+    return {
+      contract_version: '1.0',
+      mode: 'await_user_input',
+      must_show_message: true,
+      user_visible_message:
+        '입력한 patient_id로는 기존 환자 기록을 찾지 못했습니다.',
+      must_ask_user: true,
+      user_question: '수정된 6자리 patient_id만 다시 입력해 주세요.',
+      accepted_input_type: 'patient_id',
+      accepted_format: '6_digit_string',
+      allowed_actions: [
+        'ask_only_patient_id',
+        'patch_previous_payload',
+        'resend_after_user_answer'
+      ],
+      forbidden_actions: [
+        'ask_visit_date_again',
+        'ask_chief_complaint_again',
+        'ask_findings_again',
+        'ask_full_json_again',
+        'ask_full_briefing_again'
+      ],
+      auto_resend_allowed: false,
+      stop_after_response: false
+    };
+  }
+
+  if (resultType === 'hard_stop') {
+    return {
+      contract_version: '1.0',
+      mode: 'stop',
+      must_show_message: true,
+      user_visible_message:
+        buildInteraction(senderJson).user_message || message,
+      must_ask_user: false,
+      user_question: '',
+      accepted_input_type: null,
+      allowed_actions: ['show_stop_message'],
+      forbidden_actions: [
+        'retry_again',
+        'ask_patient_id_again_when_resend_false',
+        'ask_full_json_again',
+        'ask_full_briefing_again'
+      ],
+      auto_resend_allowed: false,
+      stop_after_response: true
+    };
+  }
+
+  return {
+    contract_version: '1.0',
+    mode: 'inform',
+    must_show_message: true,
+    user_visible_message: message,
+    must_ask_user: false,
+    user_question: '',
+    accepted_input_type: null,
+    allowed_actions: ['show_message'],
+    forbidden_actions: [],
+    auto_resend_allowed: false,
+    stop_after_response: false
+  };
+}
+
 function normalizeSendOutput(senderJson) {
   return {
     ok: senderJson.status === 'SUCCESS',
@@ -439,6 +571,7 @@ function normalizeSendOutput(senderJson) {
         : {},
     interaction: buildInteraction(senderJson),
     resend_plan: buildResendPlan(senderJson),
+    execution_contract: buildExecutionContract(senderJson),
     debug: senderJson.debug || {}
   };
 }
@@ -473,7 +606,7 @@ function toolDefinitions() {
     {
       name: 'sender_send',
       description:
-        'Transform canonical dental case JSON into sender-parity payload, send it to the configured Make webhook, and return normalized sender result fields including interaction and resend_plan for consistent operational handling.',
+        'Transform canonical dental case JSON into sender-parity payload, send it to the configured Make webhook, and return normalized sender result fields including interaction, resend_plan, and execution_contract for consistent operational handling.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -692,7 +825,7 @@ async function handleRpc(sessionId, message) {
       },
       serverInfo: {
         name: 'ai-dental-clinic-sender',
-        version: '0.3.0'
+        version: '0.4.0'
       }
     });
   }
@@ -758,7 +891,7 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, {
         ok: true,
         service: 'ai-dental-clinic-mcp-sse-server',
-        version: '0.3.0',
+        version: '0.4.0',
         sender_base_url: SENDER_BASE_URL,
         warm_config: {
           max_attempts: WARM_MAX_ATTEMPTS,
@@ -819,7 +952,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && pathname === '/manifest') {
       return sendJson(res, 200, {
         name: 'ai-dental-clinic-sender',
-        version: '0.3.0',
+        version: '0.4.0',
         tools: toolDefinitions()
       });
     }
