@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "AI Dental Clinic sender MCP server for canonical JSON transform and Make webhook delivery.",
   "server": {
-    "baseUrl": "https://YOUR-MCP-SERVER-BASE-URL",
+    "baseUrl": "https://mcp-adapter-b0f6.onrender.com",
     "transport": "http"
   },
   "tools": [
