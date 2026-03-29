@@ -2,19 +2,21 @@
 'use strict';
 
 /**
- * MCP Sender v0
+ * MCP Sender v1 (HTML parity)
  *
- * Minimal prototype server for AI Dental Clinic sender-role replacement testing.
+ * Goal:
+ * - Replicate AI_Dental_Clinic_JSON_Sender.html behavior in headless server form
+ * - Keep Make scenario unchanged
+ * - Keep Cloudflare Worker as thin proxy
  *
- * Features:
- * - Accepts canonical JSON in either:
- *   A) new findings_records[]-based form
- *   B) legacy branch-section form (pre_op / radiographic / operative / diagnosis / treatment_plan / doctor_reasoning)
- * - Normalizes into findings_records[] payload expected by current Make scenario interface
- * - Optional send to Make webhook
- * - Audit log per request
+ * Endpoints:
+ * - GET  /health
+ * - POST /transform
+ * - POST /send
  *
- * No external dependencies.
+ * Notes:
+ * - /transform returns the same fragment-style payload shape used by sender.html preview
+ * - /send posts that same transformed payload to the Make webhook
  */
 
 const http = require('http');
@@ -26,9 +28,14 @@ const { URL } = require('url');
 
 const HOST = '0.0.0.0';
 const PORT = Number(process.env.PORT || process.env.MCP_SENDER_PORT || 8787);
-const WEBHOOK_URL = process.env.MCP_SENDER_WEBHOOK_URL || 'https://hook.eu1.make.com/38cx9ls57f7k3akd6us4hwchrtwfl050';
-const AUDIT_DIR = process.env.MCP_SENDER_AUDIT_DIR || path.join(process.cwd(), 'mcp_sender_audit');
-const ENABLE_NETWORK_SEND = (process.env.MCP_SENDER_ENABLE_NETWORK_SEND || 'false').toLowerCase() === 'true';
+const WEBHOOK_URL =
+  process.env.MCP_SENDER_WEBHOOK_URL ||
+  'https://hook.eu1.make.com/38cx9ls57f7k3akd6us4hwchrtwfl050';
+const AUDIT_DIR =
+  process.env.MCP_SENDER_AUDIT_DIR ||
+  path.join(process.cwd(), 'mcp_sender_audit');
+const ENABLE_NETWORK_SEND =
+  (process.env.MCP_SENDER_ENABLE_NETWORK_SEND || 'false').toLowerCase() === 'true';
 
 fs.mkdirSync(AUDIT_DIR, { recursive: true });
 
@@ -37,113 +44,6 @@ const ALLOWED_MODES = new Set([
   'existing_patient_new_visit',
   'existing_visit_update'
 ]);
-
-const BRANCH_DEFS = [
-  {
-    key: 'pre_op',
-    code: 'PRE',
-    label: 'Pre-op Clinical Findings',
-    recordField: 'record',
-    toothField: 'tooth_number',
-    valueMap: {
-      'Symptom': ['symptom_1', 'symptom_2', 'symptom_3', 'symptom_4'],
-      'Symptom reproducible': 'symptom_reproducible',
-      'Visible crack': 'visible_crack',
-      'Crack detection method': ['crack_detection_method_1', 'crack_detection_method_2', 'crack_detection_method_3'],
-      'Pulp - cold test': 'pulp_cold_test',
-      'Pulp - EPT': 'pulp_ept',
-      'Functional Cusp - involvement': 'functional_cusp_involvement',
-      'existing restorations': 'existing_restorations',
-      'Existing restoration size': 'existing_restoration_size',
-      'Occlusal wear': 'occlusal_wear',
-      'Structure estimation - suspected cusp thin?': 'structure_estimate_suspected_cusp_thin',
-      'Margin estimation - suspected subgingival margin': 'suspected_subgingival_margin',
-      'Rubber Dam Feasibility': 'rubber_dam_feasibility'
-    }
-  },
-  {
-    key: 'radiographic',
-    code: 'RAD',
-    label: 'Radiographic Findings',
-    recordField: 'record',
-    toothField: 'tooth_number',
-    valueMap: {
-      'Radiograph type': 'radiograph_type',
-      'Radiographic caries depth': 'radiographic_caries_depth',
-      'Secondary caries': 'secondary_caries',
-      'Caries location': ['caries_location_1', 'caries_location_2', 'caries_location_3'],
-      'Pulp chamber size': 'pulp_chamber_size',
-      'Periapical lesion': 'periapical_lesion',
-      'Radiographic fracture sign': 'radiographic_fracture_sign',
-      'Radiograph link': 'xray_link'
-    }
-  },
-  {
-    key: 'operative',
-    code: 'OP',
-    label: 'Operative Findings',
-    recordField: 'record',
-    toothField: 'tooth_number',
-    valueMap: {
-      'Rubber dam isolation': 'rubber_dam_isolation',
-      'Caries depth (actual)': 'caries_depth_actual',
-      'Soft dentin remaining': 'soft_dentin_remaining',
-      'Crack confirmed': 'crack_confirmed',
-      'Crack location': ['crack_location_1', 'crack_location_2', 'crack_location_3'],
-      'Remaining cusp thickness (mm)': 'remaining_cusp_thickness_mm',
-      'Subgingival margin': 'subgingival_margin',
-      'Deep marginal elevation': 'deep_margin_elevation',
-      'IDS/resin coating': 'ids_resin_coating',
-      'Resin core build up type': 'core_build_up',
-      'Occlusal loading test': 'occlusal_loading_test',
-      'Loading test result': 'loading_test_result',
-      'Intraoral photo link': 'intraoral_photo_link'
-    }
-  },
-  {
-    key: 'diagnosis',
-    code: 'DX',
-    label: 'Diagnosis',
-    recordField: 'record',
-    toothField: 'tooth_number',
-    valueMap: {
-      'Structural diagnosis': ['structural_diagnosis_1', 'structural_diagnosis_2', 'structural_diagnosis_3'],
-      'Pulp diagnosis': 'pulp_diagnosis',
-      'Crack severity': 'crack_severity',
-      'Occlusal risk': 'occlusal_risk',
-      'Restorability': 'restorability'
-    }
-  },
-  {
-    key: 'treatment_plan',
-    code: 'PLAN',
-    label: 'Treatment Plan',
-    recordField: 'record',
-    toothField: 'tooth_number',
-    valueMap: {
-      'Pulp therapy': 'pulp_therapy',
-      'Restoration design': 'restoration_design',
-      'Restoration material': 'restoration_material',
-      'Implant placement': 'implant_placement',
-      'Scan file link': 'scan_stl_link'
-    }
-  },
-  {
-    key: 'doctor_reasoning',
-    code: 'DR',
-    label: 'Doctor Reasoning',
-    recordField: 'record',
-    toothField: 'tooth_number',
-    valueMap: {
-      'Decision factor': ['decision_factor_1', 'decision_factor_2', 'decision_factor_3', 'decision_factor_4', 'decision_factor_5', 'decision_factor_6'],
-      'Remaining cusp thickness decision': 'remaining_cusp_thickness_decision',
-      'Functional cusp involvement': 'functional_cusp_involvement',
-      'Crack progression risk': 'crack_progression_risk',
-      'Occlusal risk': 'occlusal_risk',
-      'Reasoning notes': 'reasoning_notes'
-    }
-  }
-];
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -161,189 +61,216 @@ function notBlank(v) {
   return v !== '' && v !== null && v !== undefined;
 }
 
-function cleanArray(values) {
-  return values.filter(notBlank);
-}
-
-function addField(target, fieldName, sourceValue) {
-  if (Array.isArray(sourceValue)) {
-    const arr = cleanArray(sourceValue);
-    if (arr.length > 0) target[fieldName] = arr;
+function addFieldHtmlParity(obj, key, value) {
+  if (Array.isArray(value)) {
+    const arr = value.filter(notBlank);
+    if (arr.length) obj[key] = arr;
     return;
   }
-  if (typeof sourceValue === 'number') {
-    if (!Number.isNaN(sourceValue) && sourceValue !== 0) target[fieldName] = sourceValue;
+
+  if (typeof value === 'number') {
+    if (!Number.isNaN(value) && value !== 0) obj[key] = value;
     return;
   }
-  if (notBlank(sourceValue)) target[fieldName] = sourceValue;
+
+  if (notBlank(value)) obj[key] = value;
 }
 
-function makeVisitId(patientId, date) {
-  if (!notBlank(patientId) || !notBlank(date)) return '';
-  return `VISIT-${patientId}-${String(date).replace(/-/g, '')}`;
+function fragHtmlParity(obj) {
+  const s = JSON.stringify(obj);
+  return s === '{}' ? '' : s.slice(1, -1);
 }
 
-function makeRecordName(visitId, toothNumber, branchCode) {
-  if (!notBlank(visitId) || !notBlank(toothNumber) || !notBlank(branchCode)) return '';
-  return `${visitId}-${toothNumber}-${branchCode}`;
-}
+function requireTopLevelSectionsHtmlParity(input) {
+  const required = [
+    'workflow',
+    'patients',
+    'visits',
+    'pre_op',
+    'radiographic',
+    'operative',
+    'diagnosis',
+    'treatment_plan',
+    'doctor_reasoning'
+  ];
 
-function requireSections(payload) {
-  if (!isPlainObject(payload.workflow)) throw new Error("payload.workflow missing or invalid");
-  if (!isPlainObject(payload.patients)) throw new Error("payload.patients missing or invalid");
-  if (!isPlainObject(payload.visits)) throw new Error("payload.visits missing or invalid");
-}
-
-function validateWorkflow(workflow) {
-  if (!ALLOWED_MODES.has(workflow.mode)) {
-    throw new Error(`Invalid workflow.mode: ${workflow.mode}`);
-  }
-}
-
-function validateBaseFields(payload) {
-  if (!notBlank(payload.patients.patient_id)) throw new Error('patients.patient_id required');
-  if (!notBlank(payload.visits.date)) throw new Error('visits.date required');
-}
-
-function isFindingsRecordsShape(payload) {
-  return Array.isArray(payload.findings_records) && isPlainObject(payload.findings_present);
-}
-
-function buildLegacyFindingsRecords(payload) {
-  const patientId = payload.patients.patient_id;
-  const date = payload.visits.date;
-  const visitId = payload.visits.visit_id || makeVisitId(patientId, date);
-  const findingsRecords = [];
-  const findingsPresent = {
-    pre_op: false,
-    radiographic: false,
-    operative: false,
-    diagnosis: false,
-    treatment_plan: false,
-    doctor_reasoning: false
-  };
-
-  for (const branch of BRANCH_DEFS) {
-    const section = payload[branch.key];
-    if (!isPlainObject(section)) continue;
-
-    const fields = {};
-    for (const [fieldName, source] of Object.entries(branch.valueMap)) {
-      if (Array.isArray(source)) {
-        addField(fields, fieldName, source.map((k) => section[k]));
-      } else if (source === 'remaining_cusp_thickness_mm') {
-        const n = Number(section[source]);
-        addField(fields, fieldName, Number.isNaN(n) ? '' : n);
-      } else {
-        addField(fields, fieldName, section[source]);
-      }
+  for (const key of required) {
+    if (!isPlainObject(input[key])) {
+      throw new Error(`canonical JSON structure error: '${key}' section missing or invalid`);
     }
+  }
+}
 
-    const toothNumber = section[branch.toothField] || '';
-    const recordName = section[branch.recordField] || makeRecordName(visitId, toothNumber, branch.code);
+function validateWorkflowHtmlParity(workflow) {
+  if (!ALLOWED_MODES.has(workflow.mode)) {
+    throw new Error('workflow.mode error');
+  }
+}
 
-    if (notBlank(recordName)) fields['Record name'] = recordName;
-    if (notBlank(visitId)) fields['Visit ID'] = visitId;
-    if (notBlank(toothNumber)) fields['Tooth number'] = toothNumber;
+/**
+ * Branch builders
+ * These map canonical JSON fields to the exact fragment labels used by sender.html.
+ */
 
-    if (Object.keys(fields).length === 0) continue;
+function buildPreOpFields(pre) {
+  const out = {};
+  addFieldHtmlParity(out, 'Symptom', [
+    pre.symptom_1,
+    pre.symptom_2,
+    pre.symptom_3,
+    pre.symptom_4
+  ]);
+  addFieldHtmlParity(out, 'Symptom reproducible', pre.symptom_reproducible);
+  addFieldHtmlParity(out, 'Visible crack', pre.visible_crack);
+  addFieldHtmlParity(out, 'Crack detection method', [
+    pre.crack_detection_method_1,
+    pre.crack_detection_method_2,
+    pre.crack_detection_method_3
+  ]);
+  addFieldHtmlParity(out, 'Pulp - cold test', pre.pulp_cold_test);
+  addFieldHtmlParity(out, 'Pulp - EPT', pre.pulp_ept);
+  addFieldHtmlParity(out, 'Functional Cusp - involvement', pre.functional_cusp_involvement);
+  addFieldHtmlParity(out, 'existing restorations', pre.existing_restorations);
+  addFieldHtmlParity(out, 'Existing restoration size', pre.existing_restoration_size);
+  addFieldHtmlParity(out, 'Occlusal wear', pre.occlusal_wear);
+  addFieldHtmlParity(
+    out,
+    'Structure estimation - suspected cusp thin?',
+    pre.structure_estimate_suspected_cusp_thin
+  );
+  addFieldHtmlParity(
+    out,
+    'Margin estimation - suspected subgingival margin',
+    pre.suspected_subgingival_margin
+  );
+  addFieldHtmlParity(out, 'Rubber Dam Feasibility', pre.rubber_dam_feasibility);
+  return out;
+}
 
-    findingsPresent[branch.key] = true;
-    findingsRecords.push({
-      branch_key: branch.key,
-      branch_code: branch.code,
-      branch_label: branch.label,
-      visit_id: visitId,
-      tooth_number: toothNumber,
-      record_name: recordName,
-      fields
-    });
+function buildRadiographicFields(rad) {
+  const out = {};
+  addFieldHtmlParity(out, 'Radiograph type', rad.radiograph_type);
+  addFieldHtmlParity(out, 'Radiographic caries depth', rad.radiographic_caries_depth);
+  addFieldHtmlParity(out, 'Secondary caries', rad.secondary_caries);
+  addFieldHtmlParity(out, 'Caries location', [
+    rad.caries_location_1,
+    rad.caries_location_2,
+    rad.caries_location_3
+  ]);
+  addFieldHtmlParity(out, 'Pulp chamber size', rad.pulp_chamber_size);
+  addFieldHtmlParity(out, 'Periapical lesion', rad.periapical_lesion);
+  addFieldHtmlParity(out, 'Radiographic fracture sign', rad.radiographic_fracture_sign);
+  addFieldHtmlParity(out, 'Radiograph link', rad.xray_link);
+  return out;
+}
+
+function buildOperativeFields(op) {
+  const out = {};
+  addFieldHtmlParity(out, 'Rubber dam isolation', op.rubber_dam_isolation);
+  addFieldHtmlParity(out, 'Caries depth (actual)', op.caries_depth_actual);
+  addFieldHtmlParity(out, 'Soft dentin remaining', op.soft_dentin_remaining);
+  addFieldHtmlParity(out, 'Crack confirmed', op.crack_confirmed);
+  addFieldHtmlParity(out, 'Crack location', [
+    op.crack_location_1,
+    op.crack_location_2,
+    op.crack_location_3
+  ]);
+
+  const cuspThickness = Number(op.remaining_cusp_thickness_mm);
+  if (!Number.isNaN(cuspThickness) && cuspThickness !== 0) {
+    out['Remaining cusp thickness (mm)'] = cuspThickness;
   }
 
-  if (findingsRecords.length === 0) {
-    throw new Error('At least one finding section must contain real data');
+  addFieldHtmlParity(out, 'Subgingival margin', op.subgingival_margin);
+  addFieldHtmlParity(out, 'Deep marginal elevation', op.deep_margin_elevation);
+  addFieldHtmlParity(out, 'IDS/resin coating', op.ids_resin_coating);
+  addFieldHtmlParity(out, 'Resin core build up type', op.core_build_up);
+  addFieldHtmlParity(out, 'Occlusal loading test', op.occlusal_loading_test);
+  addFieldHtmlParity(out, 'Loading test result', op.loading_test_result);
+  addFieldHtmlParity(out, 'Intraoral photo link', op.intraoral_photo_link);
+  return out;
+}
+
+function buildDiagnosisFields(dx) {
+  const out = {};
+  addFieldHtmlParity(out, 'Structural diagnosis', [
+    dx.structural_diagnosis_1,
+    dx.structural_diagnosis_2,
+    dx.structural_diagnosis_3
+  ]);
+  addFieldHtmlParity(out, 'Pulp diagnosis', dx.pulp_diagnosis);
+  addFieldHtmlParity(out, 'Crack severity', dx.crack_severity);
+  addFieldHtmlParity(out, 'Occlusal risk', dx.occlusal_risk);
+  addFieldHtmlParity(out, 'Restorability', dx.restorability);
+  return out;
+}
+
+function buildTreatmentPlanFields(tx) {
+  const out = {};
+  addFieldHtmlParity(out, 'Pulp therapy', tx.pulp_therapy);
+  addFieldHtmlParity(out, 'Restoration design', tx.restoration_design);
+  addFieldHtmlParity(out, 'Restoration material', tx.restoration_material);
+  addFieldHtmlParity(out, 'Implant placement', tx.implant_placement);
+  addFieldHtmlParity(out, 'Scan file link', tx.scan_stl_link);
+  return out;
+}
+
+function buildDoctorReasoningFields(rs) {
+  const out = {};
+  addFieldHtmlParity(out, 'Decision factor', [
+    rs.decision_factor_1,
+    rs.decision_factor_2,
+    rs.decision_factor_3,
+    rs.decision_factor_4,
+    rs.decision_factor_5,
+    rs.decision_factor_6
+  ]);
+  addFieldHtmlParity(
+    out,
+    'Remaining cusp thickness decision',
+    rs.remaining_cusp_thickness_decision
+  );
+  addFieldHtmlParity(out, 'Functional cusp involvement', rs.functional_cusp_involvement);
+  addFieldHtmlParity(out, 'Crack progression risk', rs.crack_progression_risk);
+  addFieldHtmlParity(out, 'Occlusal risk', rs.occlusal_risk);
+  addFieldHtmlParity(out, 'Reasoning notes', rs.reasoning_notes);
+  return out;
+}
+
+function buildFragmentPayloadFromCanonicalJson(input) {
+  requireTopLevelSectionsHtmlParity(input);
+  validateWorkflowHtmlParity(input.workflow);
+
+  const preFields = buildPreOpFields(input.pre_op);
+  const radFields = buildRadiographicFields(input.radiographic);
+  const opFields = buildOperativeFields(input.operative);
+  const dxFields = buildDiagnosisFields(input.diagnosis);
+  const txFields = buildTreatmentPlanFields(input.treatment_plan);
+  const rsFields = buildDoctorReasoningFields(input.doctor_reasoning);
+
+  const hasAnyFinding =
+    Object.keys(preFields).length > 0 ||
+    Object.keys(radFields).length > 0 ||
+    Object.keys(opFields).length > 0 ||
+    Object.keys(dxFields).length > 0 ||
+    Object.keys(txFields).length > 0 ||
+    Object.keys(rsFields).length > 0;
+
+  if (!hasAnyFinding) {
+    throw new Error('send blocked: at least one finding section must contain real data');
   }
 
   return {
-    workflow: {
-      mode: payload.workflow.mode,
-      patient_status_claim: payload.workflow.patient_status_claim || '',
-      visit_intent_claim: payload.workflow.visit_intent_claim || '',
-      target_visit_date: payload.workflow.target_visit_date || '',
-      target_visit_id: payload.workflow.target_visit_id || '',
-      target_visit_clue: payload.workflow.target_visit_clue || '',
-      uncertainty_note: payload.workflow.uncertainty_note || '',
-      correction_applied: payload.workflow.correction_applied || '',
-      correction_case: payload.workflow.correction_case || '',
-      doctor_confirmed_correction: payload.workflow.doctor_confirmed_correction ?? '',
-      correction_source: payload.workflow.correction_source || '',
-      patient_recheck_attempted: payload.workflow.patient_recheck_attempted ?? ''
-    },
-    patients: {
-      patient_id: payload.patients.patient_id,
-      birth_year: String(payload.patients.birth_year ?? ''),
-      gender: payload.patients.gender || '',
-      last_dental_visit_date: payload.patients.last_dental_visit_date || ''
-    },
-    visits: {
-      visit_id: visitId,
-      date,
-      visit_type: payload.visits.visit_type || '',
-      chief_complaint: payload.visits.chief_complaint || '',
-      pain_level: Number(payload.visits.pain_level || 0)
-    },
-    findings_present: findingsPresent,
-    findings_records: findingsRecords,
-    record_name_rule: payload.record_name_rule || '',
-    record_name_generation_source: payload.record_name_generation_source || ''
+    workflow: input.workflow,
+    patients: input.patients,
+    visits: input.visits,
+    pre_op_fields_json: fragHtmlParity(preFields),
+    radiographic_fields_json: fragHtmlParity(radFields),
+    operative_fields_json: fragHtmlParity(opFields),
+    diagnosis_fields_json: fragHtmlParity(dxFields),
+    treatment_plan_fields_json: fragHtmlParity(txFields),
+    doctor_reasoning_fields_json: fragHtmlParity(rsFields)
   };
-}
-
-function normalizeFindingsRecordsPayload(payload) {
-  requireSections(payload);
-  validateWorkflow(payload.workflow);
-  validateBaseFields(payload);
-
-  if (isFindingsRecordsShape(payload)) {
-    if (payload.findings_records.length === 0) {
-      throw new Error('findings_records must not be empty');
-    }
-    return {
-      workflow: {
-        mode: payload.workflow.mode,
-        patient_status_claim: payload.workflow.patient_status_claim || '',
-        visit_intent_claim: payload.workflow.visit_intent_claim || '',
-        target_visit_date: payload.workflow.target_visit_date || '',
-        target_visit_id: payload.workflow.target_visit_id || '',
-        target_visit_clue: payload.workflow.target_visit_clue || '',
-        uncertainty_note: payload.workflow.uncertainty_note || '',
-        correction_applied: payload.workflow.correction_applied || '',
-        correction_case: payload.workflow.correction_case || '',
-        doctor_confirmed_correction: payload.workflow.doctor_confirmed_correction ?? '',
-        correction_source: payload.workflow.correction_source || '',
-        patient_recheck_attempted: payload.workflow.patient_recheck_attempted ?? ''
-      },
-      patients: {
-        patient_id: payload.patients.patient_id,
-        birth_year: String(payload.patients.birth_year ?? ''),
-        gender: payload.patients.gender || '',
-        last_dental_visit_date: payload.patients.last_dental_visit_date || ''
-      },
-      visits: {
-        visit_id: payload.visits.visit_id || makeVisitId(payload.patients.patient_id, payload.visits.date),
-        date: payload.visits.date,
-        visit_type: payload.visits.visit_type || '',
-        chief_complaint: payload.visits.chief_complaint || '',
-        pain_level: Number(payload.visits.pain_level || 0)
-      },
-      findings_present: payload.findings_present,
-      findings_records: payload.findings_records,
-      record_name_rule: payload.record_name_rule || '',
-      record_name_generation_source: payload.record_name_generation_source || ''
-    };
-  }
-
-  return buildLegacyFindingsRecords(payload);
 }
 
 function parseJsonBody(req) {
@@ -371,6 +298,7 @@ function postJson(urlString, body) {
   return new Promise((resolve, reject) => {
     const url = new URL(urlString);
     const data = JSON.stringify(body);
+
     const options = {
       method: 'POST',
       hostname: url.hostname,
@@ -381,10 +309,13 @@ function postJson(urlString, body) {
         'Content-Length': Buffer.byteLength(data)
       }
     };
+
     const transport = url.protocol === 'https:' ? https : http;
     const request = transport.request(options, (response) => {
       let responseData = '';
-      response.on('data', (chunk) => { responseData += chunk; });
+      response.on('data', (chunk) => {
+        responseData += chunk;
+      });
       response.on('end', () => {
         resolve({
           statusCode: response.statusCode || 0,
@@ -393,6 +324,7 @@ function postJson(urlString, body) {
         });
       });
     });
+
     request.on('error', reject);
     request.write(data);
     request.end();
@@ -438,37 +370,74 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && req.url === '/health') {
       return sendJson(res, 200, {
         ok: true,
-        service: 'mcp-sender-v0',
-        version: '0.1.0',
+        service: 'mcp-sender-v1',
+        mode: 'html-parity',
         enable_network_send: ENABLE_NETWORK_SEND,
         webhook_url: WEBHOOK_URL
       });
     }
 
-    if (req.method === 'POST' && (req.url === '/transform' || req.url === '/send')) {
+    if (req.method === 'POST' && req.url === '/transform') {
       const envelope = normalizeEnvelope(await parseJsonBody(req));
-      const normalizedPayload = normalizeFindingsRecordsPayload(envelope.payload);
-      const transformedHash = sha256(JSON.stringify(normalizedPayload));
+      const transformedPayload = buildFragmentPayloadFromCanonicalJson(envelope.payload);
       const inputHash = sha256(JSON.stringify(envelope.payload));
+      const transformedHash = sha256(JSON.stringify(transformedPayload));
+
+      const responseBody = {
+        request_id: envelope.request_id,
+        status: 'SUCCESS',
+        stage: 'TRANSFORM',
+        input_hash: inputHash,
+        transformed_hash: transformedHash,
+        transformed_payload: transformedPayload,
+        debug: {
+          validation_passed: true,
+          contract_valid: true,
+          transformation_applied: true
+        }
+      };
+
+      writeAudit({
+        request_id: envelope.request_id,
+        timestamp: envelope.timestamp,
+        source: envelope.source,
+        endpoint: req.url,
+        mode: 'html-parity',
+        input_hash: inputHash,
+        transformed_hash: transformedHash,
+        payload: envelope.payload,
+        transformed_payload: transformedPayload,
+        transport: null,
+        status: 'SUCCESS',
+        stage: 'TRANSFORM'
+      });
+
+      return sendJson(res, 200, responseBody);
+    }
+
+    if (req.method === 'POST' && req.url === '/send') {
+      const envelope = normalizeEnvelope(await parseJsonBody(req));
+      const transformedPayload = buildFragmentPayloadFromCanonicalJson(envelope.payload);
+      const inputHash = sha256(JSON.stringify(envelope.payload));
+      const transformedHash = sha256(JSON.stringify(transformedPayload));
 
       let transportResult = null;
       let status = 'SUCCESS';
       let stage = 'COMPLETED';
 
-      if (req.url === '/send') {
-        if (!ENABLE_NETWORK_SEND) {
+      if (!ENABLE_NETWORK_SEND) {
+        status = 'FAILED';
+        stage = 'TRANSPORT';
+        transportResult = {
+          statusCode: 0,
+          bodyText:
+            'Network send disabled. Set MCP_SENDER_ENABLE_NETWORK_SEND=true to allow live webhook POST.'
+        };
+      } else {
+        transportResult = await postJson(WEBHOOK_URL, transformedPayload);
+        if (transportResult.statusCode < 200 || transportResult.statusCode >= 300) {
           status = 'FAILED';
           stage = 'TRANSPORT';
-          transportResult = {
-            statusCode: 0,
-            bodyText: 'Network send disabled. Set MCP_SENDER_ENABLE_NETWORK_SEND=true to allow live webhook POST.'
-          };
-        } else {
-          transportResult = await postJson(WEBHOOK_URL, normalizedPayload);
-          if (transportResult.statusCode < 200 || transportResult.statusCode >= 300) {
-            status = 'FAILED';
-            stage = 'TRANSPORT';
-          }
         }
       }
 
@@ -478,7 +447,7 @@ const server = http.createServer(async (req, res) => {
         stage,
         input_hash: inputHash,
         transformed_hash: transformedHash,
-        transformed_payload: normalizedPayload,
+        transformed_payload: transformedPayload,
         transport: transportResult,
         debug: {
           validation_passed: true,
@@ -493,10 +462,11 @@ const server = http.createServer(async (req, res) => {
         timestamp: envelope.timestamp,
         source: envelope.source,
         endpoint: req.url,
+        mode: 'html-parity',
         input_hash: inputHash,
         transformed_hash: transformedHash,
         payload: envelope.payload,
-        transformed_payload: normalizedPayload,
+        transformed_payload: transformedPayload,
         transport: transportResult,
         status,
         stage
@@ -505,7 +475,7 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, responseBody);
     }
 
-    sendJson(res, 404, {
+    return sendJson(res, 404, {
       error: 'Not found',
       endpoints: ['GET /health', 'POST /transform', 'POST /send']
     });
@@ -519,7 +489,8 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(`MCP Sender v0 listening on http://${HOST}:${PORT}`);
+  console.log(`MCP Sender v1 listening on http://${HOST}:${PORT}`);
   console.log(`Audit directory: ${AUDIT_DIR}`);
   console.log(`Network send enabled: ${ENABLE_NETWORK_SEND}`);
+  console.log(`Mode: html-parity`);
 });
