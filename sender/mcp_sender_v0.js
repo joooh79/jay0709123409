@@ -4,13 +4,14 @@
 /**
  * MCP Sender v0
  *
- * findings_records parity patch
+ * findings_records parity patch + Make response surfacing
  *
  * Goal:
  * - Keep current Make scenario unchanged
  * - Keep Cloudflare Worker unchanged
  * - Accept findings_records-based canonical sender input
- * - Match current sender.html outbound preview behavior as closely as possible
+ * - Match current sender.html outbound preview behavior
+ * - Surface Make webhook response fields directly in MCP /send output
  *
  * Endpoints:
  * - GET /health
@@ -187,8 +188,6 @@ function normalizeFindingsRecordsPayload(payload) {
 
   return {
     workflow: {
-      // preview parity observed from sender.html:
-      // incoming mode is blanked out
       mode: '',
       patient_status_claim: payload.workflow.patient_status_claim || '',
       visit_intent_claim: payload.workflow.visit_intent_claim || '',
@@ -201,8 +200,6 @@ function normalizeFindingsRecordsPayload(payload) {
     },
 
     patients: {
-      // preview parity observed from sender.html:
-      // keep only these fields
       patient_id: payload.patients.patient_id || '',
       birth_year: payload.patients.birth_year ?? '',
       gender: payload.patients.gender || ''
@@ -233,13 +230,66 @@ function normalizeFindingsRecordsPayload(payload) {
   };
 }
 
+function tryParseJson(text) {
+  if (!notBlank(text)) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function buildMakeResponseSurface(transportResult) {
+  const raw = transportResult && typeof transportResult.bodyText === 'string'
+    ? transportResult.bodyText
+    : '';
+
+  const parsed = tryParseJson(raw);
+
+  if (!parsed || !isPlainObject(parsed)) {
+    return {
+      make_response_raw: raw,
+      make_response_parsed: null,
+      surfaced: {
+        status: '',
+        gate_result: '',
+        correction_needed: null,
+        hard_stop: null,
+        reason_code: '',
+        message: '',
+        write_allowed: null,
+        resend_allowed: null,
+        same_date_visit_exists: null,
+        suggested_correction: null
+      }
+    };
+  }
+
+  return {
+    make_response_raw: raw,
+    make_response_parsed: parsed,
+    surfaced: {
+      status: parsed.status ?? '',
+      gate_result: parsed.gate_result ?? '',
+      correction_needed: parsed.correction_needed ?? null,
+      hard_stop: parsed.hard_stop ?? null,
+      reason_code: parsed.reason_code ?? '',
+      message: parsed.message ?? '',
+      write_allowed: parsed.write_allowed ?? null,
+      resend_allowed: parsed.resend_allowed ?? null,
+      same_date_visit_exists: parsed.same_date_visit_exists ?? null,
+      suggested_correction: parsed.suggested_correction ?? null
+    }
+  };
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     if (req.method === 'GET' && req.url === '/health') {
       return sendJson(res, 200, {
         ok: true,
         service: 'mcp-sender-v0',
-        version: '0.2.0-findings-records-parity',
+        version: '0.3.0-findings-records-parity-make-response',
         enable_network_send: ENABLE_NETWORK_SEND,
         webhook_url: WEBHOOK_URL
       });
@@ -300,6 +350,7 @@ const server = http.createServer(async (req, res) => {
         stage = 'TRANSPORT';
         transportResult = {
           statusCode: 0,
+          headers: {},
           bodyText:
             'Network send disabled. Set MCP_SENDER_ENABLE_NETWORK_SEND=true to allow live webhook POST.'
         };
@@ -312,6 +363,8 @@ const server = http.createServer(async (req, res) => {
         }
       }
 
+      const makeSurface = buildMakeResponseSurface(transportResult);
+
       const responseBody = {
         request_id: envelope.request_id,
         status,
@@ -319,13 +372,30 @@ const server = http.createServer(async (req, res) => {
         input_hash: inputHash,
         transformed_hash: transformedHash,
         transformed_payload: transformedPayload,
+
         transport: transportResult,
+
+        make_response_raw: makeSurface.make_response_raw,
+        make_response_parsed: makeSurface.make_response_parsed,
+
+        message: makeSurface.surfaced.message,
+        make_status: makeSurface.surfaced.status,
+        gate_result: makeSurface.surfaced.gate_result,
+        correction_needed: makeSurface.surfaced.correction_needed,
+        hard_stop: makeSurface.surfaced.hard_stop,
+        reason_code: makeSurface.surfaced.reason_code,
+        write_allowed: makeSurface.surfaced.write_allowed,
+        resend_allowed: makeSurface.surfaced.resend_allowed,
+        same_date_visit_exists: makeSurface.surfaced.same_date_visit_exists,
+        suggested_correction: makeSurface.surfaced.suggested_correction,
+
         debug: {
           validation_passed: true,
           contract_valid: true,
           transformation_applied: true,
           webhook_sent: ENABLE_NETWORK_SEND && status === 'SUCCESS',
-          parity_mode: 'findings_records'
+          parity_mode: 'findings_records',
+          make_response_parsed: !!makeSurface.make_response_parsed
         }
       };
 
@@ -339,6 +409,9 @@ const server = http.createServer(async (req, res) => {
         payload: envelope.payload,
         transformed_payload: transformedPayload,
         transport: transportResult,
+        make_response_raw: makeSurface.make_response_raw,
+        make_response_parsed: makeSurface.make_response_parsed,
+        surfaced_make_fields: makeSurface.surfaced,
         status,
         stage
       });
@@ -364,4 +437,5 @@ server.listen(PORT, HOST, () => {
   console.log(`Audit directory: ${AUDIT_DIR}`);
   console.log(`Network send enabled: ${ENABLE_NETWORK_SEND}`);
   console.log(`Parity mode: findings_records`);
+  console.log(`Make response surfacing: enabled`);
 });
