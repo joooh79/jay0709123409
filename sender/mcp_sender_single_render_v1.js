@@ -600,7 +600,7 @@ function buildInteraction(senderJson) {
       user_message:
         '같은 날짜에 이미 등록된 방문 기록이 있습니다. 숫자만 입력해 주세요.',
       assistant_question:
-        '1. 기존 기록에 이어서 수정/추가로 진행\n2. 새 방문으로 유지(자동 진행 중단)',
+        '1. 기존 기록에 이어서 수정/추가로 진행\n2. 새 방문으로 유지하고 그대로 진행',
       required_user_input: {
         type: 'single_number_choice',
         field: 'workflow.doctor_confirmed_correction',
@@ -612,7 +612,7 @@ function buildInteraction(senderJson) {
           },
           {
             number: 2,
-            label: '새 방문으로 유지(자동 진행 중단)',
+            label: '새 방문으로 유지하고 그대로 진행',
             value: 'keep_new_visit_claim'
           }
         ]
@@ -634,25 +634,12 @@ function buildInteraction(senderJson) {
     return {
       mode: 'ask_user',
       ui_kind: 'input',
-      user_message:
-        '입력한 patient_id로는 기존 환자 기록을 찾지 못했습니다. 숫자만 입력해 주세요.',
-      assistant_question:
-        '1. patient_id 다시 입력\n2. 취소',
+      user_message: '입력한 patient_id로는 기존 환자 기록을 찾지 못했습니다.',
+      assistant_question: '수정된 6자리 patient_id만 다시 입력해 주세요.',
       required_user_input: {
-        type: 'single_number_choice',
-        field: 'patient_recheck_menu',
-        choices: [
-          {
-            number: 1,
-            label: 'patient_id 다시 입력',
-            value: 'reenter_patient_id'
-          },
-          {
-            number: 2,
-            label: '취소',
-            value: 'cancel'
-          }
-        ]
+        type: 'patient_id',
+        field: 'patients.patient_id',
+        format: '6_digit_string'
       },
       do_not_ask: [
         'visits.date',
@@ -825,7 +812,7 @@ function buildExecutionContract(senderJson) {
         '같은 날짜에 이미 등록된 방문 기록이 있습니다. 숫자만 입력해 주세요.',
       must_ask_user: true,
       user_question:
-        '1. 기존 기록에 이어서 수정/추가로 진행\n2. 새 방문으로 유지(자동 진행 중단)',
+        '1. 기존 기록에 이어서 수정/추가로 진행\n2. 새 방문으로 유지하고 그대로 진행',
       accepted_input_type: 'single_number_choice',
       allowed_numbers: [1, 2],
       number_meanings: {
@@ -854,22 +841,15 @@ function buildExecutionContract(senderJson) {
   ) {
     return {
       contract_version: '1.0',
-      mode: 'await_user_choice',
+      mode: 'await_user_input',
       must_show_message: true,
-      user_visible_message:
-        '입력한 patient_id로는 기존 환자 기록을 찾지 못했습니다. 숫자만 입력해 주세요.',
+      user_visible_message: '입력한 patient_id로는 기존 환자 기록을 찾지 못했습니다.',
       must_ask_user: true,
-      user_question:
-        '1. patient_id 다시 입력\n2. 취소',
-      accepted_input_type: 'single_number_choice',
-      allowed_numbers: [1, 2],
-      number_meanings: {
-        '1': 'reenter_patient_id',
-        '2': 'cancel'
-      },
+      user_question: '수정된 6자리 patient_id만 다시 입력해 주세요.',
+      accepted_input_type: 'patient_id',
+      accepted_format: '6_digit_string',
       allowed_actions: [
-        'ask_single_number_choice',
-        'ask_only_patient_id_after_choice_1',
+        'ask_only_patient_id',
         'patch_previous_payload',
         'resend_after_user_answer'
       ],
