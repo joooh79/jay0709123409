@@ -1,10 +1,10 @@
 {
-  "name": "ai-dental-clinic-render-single-mcp",
+  "name": "ai-dental-clinic-single-render-mcp",
   "version": "1.0.0",
-  "description": "Single Render MCP server for AI Dental Clinic sender",
-  "main": "server.js",
+  "description": "Single-render MCP sender server for AI Dental Clinic",
+  "main": "mcp_sender_single_render_v1.js",
   "type": "commonjs",
   "scripts": {
-    "start": "node server.js"
+    "start": "node mcp_sender_single_render_v1.js"
   }
 }
