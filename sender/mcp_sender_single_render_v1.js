@@ -164,9 +164,13 @@ function transformCanonicalPayload(payload) {
       visit_type: normalizeOptionalText(payload.visits.visit_type),
       chief_complaint: normalizeOptionalText(payload.visits.chief_complaint),
       pain_level:
-        typeof payload.visits.pain_level === 'number'
-          ? payload.visits.pain_level
-          : Number(payload.visits.pain_level || 0)
+        payload.visits.pain_level === '' ||
+        payload.visits.pain_level === null ||
+        payload.visits.pain_level === undefined
+          ? ''
+          : typeof payload.visits.pain_level === 'number'
+            ? payload.visits.pain_level
+            : Number(payload.visits.pain_level)
     },
     findings_present: {
       pre_op: !!payload.findings_present.pre_op,
