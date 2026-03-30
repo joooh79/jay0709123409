@@ -10,6 +10,9 @@ const HOST = '0.0.0.0';
 const PORT = Number(process.env.PORT || 3000);
 const MAKE_WEBHOOK_URL = process.env.MAKE_WEBHOOK_URL || '';
 
+const HEALTH_CHECK_TIMEOUT_MS = Number(process.env.HEALTH_CHECK_TIMEOUT_MS || 120000);
+const HEALTH_CHECK_MAX_ATTEMPTS = Number(process.env.HEALTH_CHECK_MAX_ATTEMPTS || 2);
+
 const sessions = new Map();
 
 function corsHeaders() {
@@ -295,8 +298,18 @@ function extractBestMessage(senderJson) {
       ? safeString(senderJson.make_response_parsed.message)
       : '';
 
+  const parsedGateMessage =
+    senderJson.make_response_parsed &&
+    typeof senderJson.make_response_parsed === 'object'
+      ? safeString(senderJson.make_response_parsed.gate_message)
+      : '';
+
   if (parsedMessage && !isGarbledText(parsedMessage)) {
     return parsedMessage;
+  }
+
+  if (parsedGateMessage && !isGarbledText(parsedGateMessage)) {
+    return parsedGateMessage;
   }
 
   if (topLevelMessage && !isGarbledText(topLevelMessage)) {
@@ -308,13 +321,15 @@ function extractBestMessage(senderJson) {
     try {
       const reparsed = JSON.parse(raw);
       const rawMessage = safeString(reparsed.message);
+      const rawGateMessage = safeString(reparsed.gate_message);
       if (rawMessage) return rawMessage;
+      if (rawGateMessage) return rawGateMessage;
     } catch {
       // ignore
     }
   }
 
-  return parsedMessage || topLevelMessage || '';
+  return parsedMessage || parsedGateMessage || topLevelMessage || '';
 }
 
 function mapResultTypeFromMake(parsed, transport) {
@@ -374,7 +389,7 @@ function buildSendEnvelope(transformResult, transport) {
   let suggestedCorrection = null;
 
   if (parsed && typeof parsed === 'object') {
-    message = safeString(parsed.message);
+    message = safeString(parsed.message) || safeString(parsed.gate_message);
     writeAllowed =
       typeof parsed.write_allowed === 'boolean' ? parsed.write_allowed : null;
     resendAllowed =
@@ -840,6 +855,57 @@ async function runTransformTool(args) {
   };
 }
 
+function runHealthTool() {
+  return {
+    ok: true,
+    service: 'mcp-sender-v1-render-single',
+    version: '1.0.0',
+    enable_network_send: !!MAKE_WEBHOOK_URL,
+    webhook_url: MAKE_WEBHOOK_URL || '',
+    health_check_timeout_ms: HEALTH_CHECK_TIMEOUT_MS,
+    health_check_max_attempts: HEALTH_CHECK_MAX_ATTEMPTS
+  };
+}
+
+async function ensureServerReady() {
+  let lastError = null;
+  const localHealthUrl = `http://127.0.0.1:${PORT}/health`;
+
+  for (let attempt = 1; attempt <= HEALTH_CHECK_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const transport = await httpRequest(
+        localHealthUrl,
+        'GET',
+        null,
+        HEALTH_CHECK_TIMEOUT_MS
+      );
+
+      if (transport.statusCode >= 200 && transport.statusCode < 300) {
+        const parsed = transport.bodyJson;
+        if (parsed && parsed.ok === true) {
+          return {
+            ok: true,
+            attempts_used: attempt,
+            transport
+          };
+        }
+      }
+
+      lastError = new Error(
+        `Health check non-ok response (status=${transport.statusCode})`
+      );
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw new Error(
+    `Server not ready after ${HEALTH_CHECK_MAX_ATTEMPTS} attempts (${HEALTH_CHECK_TIMEOUT_MS}ms each)${
+      lastError ? `: ${lastError.message}` : ''
+    }`
+  );
+}
+
 async function runSendTool(args) {
   requireObject(args, 'args');
   requireObject(args.payload, 'args.payload');
@@ -847,6 +913,8 @@ async function runSendTool(args) {
   if (!MAKE_WEBHOOK_URL) {
     throw new Error('MAKE_WEBHOOK_URL is not configured');
   }
+
+  await ensureServerReady();
 
   const transformResult = transformCanonicalPayload(args.payload);
   const transport = await httpRequest(
@@ -857,16 +925,6 @@ async function runSendTool(args) {
   );
 
   return buildSendEnvelope(transformResult, transport);
-}
-
-function runHealthTool() {
-  return {
-    ok: true,
-    service: 'mcp-sender-v1-render-single',
-    version: '1.0.0',
-    enable_network_send: !!MAKE_WEBHOOK_URL,
-    webhook_url: MAKE_WEBHOOK_URL || ''
-  };
 }
 
 function toolDefinitions() {
@@ -1073,7 +1131,9 @@ const server = http.createServer(async (req, res) => {
         service: 'ai-dental-clinic-mcp-sse-server',
         version: '1.0.0',
         enable_network_send: !!MAKE_WEBHOOK_URL,
-        webhook_url: MAKE_WEBHOOK_URL || ''
+        webhook_url: MAKE_WEBHOOK_URL || '',
+        health_check_timeout_ms: HEALTH_CHECK_TIMEOUT_MS,
+        health_check_max_attempts: HEALTH_CHECK_MAX_ATTEMPTS
       });
     }
 
@@ -1155,4 +1215,6 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, HOST, () => {
   console.log(`MCP SSE server listening on http://${HOST}:${PORT}`);
   console.log(`MAKE_WEBHOOK_URL configured: ${!!MAKE_WEBHOOK_URL}`);
+  console.log(`HEALTH_CHECK_TIMEOUT_MS=${HEALTH_CHECK_TIMEOUT_MS}`);
+  console.log(`HEALTH_CHECK_MAX_ATTEMPTS=${HEALTH_CHECK_MAX_ATTEMPTS}`);
 });
