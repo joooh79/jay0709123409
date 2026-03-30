@@ -238,6 +238,29 @@ function transformCanonicalPayload(payload) {
 }
 
 function buildPreviewSummary(transformedPayload) {
+  const patientStatusClaim = transformedPayload.workflow?.patient_status_claim || '';
+  const visitIntentClaim = transformedPayload.workflow?.visit_intent_claim || '';
+
+  function buildClaimLabel(patientStatus, visitIntent) {
+    if (patientStatus === 'existing_patient' && visitIntent === 'new_visit') {
+      return '구(이미 등록된) 환자 신규 방문 기록';
+    }
+
+    if (patientStatus === 'existing_patient' && visitIntent === 'existing_visit_update') {
+      return '구(이미 등록된) 환자 기존 방문 업데이트';
+    }
+
+    if (patientStatus === 'new_patient' && visitIntent === 'new_visit') {
+      return '신규 환자 신규 방문 기록';
+    }
+
+    if (patientStatus === 'new_patient' && visitIntent === 'existing_visit_update') {
+      return '신규 환자 기존 방문 업데이트(비정상 조합 가능)';
+    }
+
+    return '';
+  }
+
   const findings = Array.isArray(transformedPayload.findings_records)
     ? transformedPayload.findings_records.map((record, index) => {
         const symptom = Array.isArray(record.fields?.Symptom)
@@ -259,6 +282,9 @@ function buildPreviewSummary(transformedPayload) {
 
   return {
     patient_id: transformedPayload.patients?.patient_id || '',
+    patient_status_claim: patientStatusClaim,
+    visit_intent_claim: visitIntentClaim,
+    claim_label: buildClaimLabel(patientStatusClaim, visitIntentClaim),
     visit_id: transformedPayload.visits?.visit_id || '',
     visit_date: transformedPayload.visits?.date || '',
     visit_type: transformedPayload.visits?.visit_type || '',
