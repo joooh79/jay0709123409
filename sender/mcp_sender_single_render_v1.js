@@ -127,6 +127,19 @@ function buildDeterministicRecordName(visitId, toothNumber, branchCode) {
   return `${visitId}-${toothNumber}-${branchCode}`;
 }
 
+function normalizePainLevel(value) {
+  if (value === '' || value === null || value === undefined) {
+    return '';
+  }
+
+  if (typeof value === 'number') {
+    return value;
+  }
+
+  const coerced = Number(value);
+  return Number.isNaN(coerced) ? '' : coerced;
+}
+
 function transformCanonicalPayload(payload) {
   validatePayloadShape(payload);
 
@@ -163,14 +176,7 @@ function transformCanonicalPayload(payload) {
       date: safeString(payload.visits.date),
       visit_type: normalizeOptionalText(payload.visits.visit_type),
       chief_complaint: normalizeOptionalText(payload.visits.chief_complaint),
-      pain_level:
-        payload.visits.pain_level === '' ||
-        payload.visits.pain_level === null ||
-        payload.visits.pain_level === undefined
-          ? ''
-          : typeof payload.visits.pain_level === 'number'
-            ? payload.visits.pain_level
-            : Number(payload.visits.pain_level)
+      pain_level: normalizePainLevel(payload.visits.pain_level)
     },
     findings_present: {
       pre_op: !!payload.findings_present.pre_op,
@@ -228,6 +234,91 @@ function transformCanonicalPayload(payload) {
       transformation_applied: true,
       parity_mode: 'findings_records'
     }
+  };
+}
+
+function buildPreviewSummary(transformedPayload) {
+  const findings = Array.isArray(transformedPayload.findings_records)
+    ? transformedPayload.findings_records.map((record, index) => {
+        const symptom = Array.isArray(record.fields?.Symptom)
+          ? record.fields.Symptom.join(', ')
+          : '';
+
+        return {
+          no: index + 1,
+          branch_code: record.branch_code || '',
+          branch_label: record.branch_label || '',
+          tooth_number: record.tooth_number || '',
+          record_name: record.record_name || '',
+          symptom,
+          visible_crack: record.fields?.['Visible crack'] || '',
+          pulp_cold_test: record.fields?.['Pulp - cold test'] || ''
+        };
+      })
+    : [];
+
+  return {
+    patient_id: transformedPayload.patients?.patient_id || '',
+    visit_id: transformedPayload.visits?.visit_id || '',
+    visit_date: transformedPayload.visits?.date || '',
+    visit_type: transformedPayload.visits?.visit_type || '',
+    chief_complaint: transformedPayload.visits?.chief_complaint || '',
+    pain_level:
+      transformedPayload.visits?.pain_level === ''
+        ? '(blank)'
+        : transformedPayload.visits?.pain_level,
+    findings
+  };
+}
+
+function buildTransformInteraction() {
+  return {
+    mode: 'ask_user',
+    ui_kind: 'preview_confirmation',
+    user_message:
+      '변환 preview입니다. 이 내용대로 Make/Airtable에 전송하시겠습니까?',
+    assistant_question:
+      '숫자만 입력해 주세요.\n1. 이대로 전송\n2. 수정 후 다시 preview\n3. 취소',
+    required_user_input: {
+      type: 'single_number_choice',
+      field: 'preview_confirmation',
+      choices: [
+        { number: 1, label: '이대로 전송', value: 'send_now' },
+        { number: 2, label: '수정 후 다시 preview', value: 'revise_and_preview_again' },
+        { number: 3, label: '취소', value: 'cancel' }
+      ]
+    },
+    do_not_ask: []
+  };
+}
+
+function buildTransformExecutionContract() {
+  return {
+    contract_version: '1.0',
+    mode: 'await_user_choice',
+    must_show_message: true,
+    user_visible_message:
+      '변환 preview입니다. 아래 내용을 확인한 뒤 숫자로 선택해 주세요.',
+    must_ask_user: true,
+    user_question:
+      '1. 이대로 전송\n2. 수정 후 다시 preview\n3. 취소',
+    accepted_input_type: 'single_number_choice',
+    allowed_numbers: [1, 2, 3],
+    number_meanings: {
+      '1': 'send_now',
+      '2': 'revise_and_preview_again',
+      '3': 'cancel'
+    },
+    allowed_actions: [
+      'show_preview',
+      'ask_single_number_choice',
+      'send_after_user_confirms'
+    ],
+    forbidden_actions: [
+      'auto_send_without_confirmation'
+    ],
+    auto_resend_allowed: false,
+    stop_after_response: false
   };
 }
 
@@ -407,7 +498,7 @@ function buildSendEnvelope(transformResult, transport) {
         ? parsed.suggested_correction
         : null;
   } else if (resultType === 'accepted_no_json') {
-    message = 'Webhook accepted. Downstream write confirmation JSON was not returned.';
+    message = '정상적으로 기록을 생성하였습니다.';
     writeAllowed = true;
     resendAllowed = false;
     makeStatus = 'accepted_no_json';
@@ -465,9 +556,8 @@ function buildInteraction(senderJson) {
   if (resultType === 'accepted_no_json') {
     return {
       mode: 'inform',
-      ui_kind: 'info',
-      user_message:
-        'Webhook accepted 상태입니다. Downstream write confirmation JSON은 반환되지 않았습니다.',
+      ui_kind: 'success',
+      user_message: '정상적으로 기록을 생성하였습니다.',
       assistant_question: '',
       required_user_input: null,
       do_not_ask: []
@@ -482,18 +572,21 @@ function buildInteraction(senderJson) {
       mode: 'ask_user',
       ui_kind: 'confirmation',
       user_message:
-        '같은 날짜에 이미 등록된 방문 기록이 있습니다. 지금 하려는 입력이 새 방문을 새로 등록하는 것인지, 아니면 이미 등록된 그 방문 기록에 내용을 이어서 추가/수정하는 것인지 확인이 필요합니다.',
-      assistant_question: '기존 기록에 이어서 수정/추가로 진행할까요?',
+        '같은 날짜에 이미 등록된 방문 기록이 있습니다. 숫자만 입력해 주세요.',
+      assistant_question:
+        '1. 기존 기록에 이어서 수정/추가로 진행\n2. 새 방문으로 유지(자동 진행 중단)',
       required_user_input: {
-        type: 'choice',
+        type: 'single_number_choice',
         field: 'workflow.doctor_confirmed_correction',
         choices: [
           {
-            label: '기존 기록에 이어서 수정/추가',
+            number: 1,
+            label: '기존 기록에 이어서 수정/추가로 진행',
             value: 'confirm_existing_visit_update'
           },
           {
-            label: '새 방문으로 새로 등록 유지',
+            number: 2,
+            label: '새 방문으로 유지(자동 진행 중단)',
             value: 'keep_new_visit_claim'
           }
         ]
@@ -515,12 +608,25 @@ function buildInteraction(senderJson) {
     return {
       mode: 'ask_user',
       ui_kind: 'input',
-      user_message: '입력한 patient_id로는 기존 환자 기록을 찾지 못했습니다.',
-      assistant_question: '수정된 6자리 patient_id만 다시 입력해 주세요.',
+      user_message:
+        '입력한 patient_id로는 기존 환자 기록을 찾지 못했습니다. 숫자만 입력해 주세요.',
+      assistant_question:
+        '1. patient_id 다시 입력\n2. 취소',
       required_user_input: {
-        type: 'patient_id',
-        field: 'patients.patient_id',
-        format: '6_digit_string'
+        type: 'single_number_choice',
+        field: 'patient_recheck_menu',
+        choices: [
+          {
+            number: 1,
+            label: 'patient_id 다시 입력',
+            value: 'reenter_patient_id'
+          },
+          {
+            number: 2,
+            label: '취소',
+            value: 'cancel'
+          }
+        ]
       },
       do_not_ask: [
         'visits.date',
@@ -560,7 +666,7 @@ function buildInteraction(senderJson) {
       mode: 'stop',
       ui_kind: 'hard_stop',
       user_message:
-        '같은 날짜에 이미 등록된 방문 기록이 있는데도 새 방문으로 새로 등록을 유지하려고 했기 때문에 자동 진행이 중단되었습니다. 수동 확인이 필요합니다.',
+        '같은 날짜에 이미 등록된 방문 기록이 있는데도 새 방문으로 유지하려 했기 때문에 자동 진행이 중단되었습니다. 수동 확인이 필요합니다.',
       assistant_question: '',
       required_user_input: null,
       do_not_ask: [
@@ -668,17 +774,16 @@ function buildExecutionContract(senderJson) {
   if (resultType === 'accepted_no_json') {
     return {
       contract_version: '1.0',
-      mode: 'inform',
+      mode: 'complete',
       must_show_message: true,
-      user_visible_message:
-        'Webhook accepted 상태입니다. Downstream write confirmation JSON은 반환되지 않았습니다.',
+      user_visible_message: '정상적으로 기록을 생성하였습니다.',
       must_ask_user: false,
       user_question: '',
       accepted_input_type: null,
-      allowed_actions: ['show_message', 'optional_postcheck'],
+      allowed_actions: ['finish', 'optional_postcheck'],
       forbidden_actions: [],
       auto_resend_allowed: false,
-      stop_after_response: false
+      stop_after_response: true
     };
   }
 
@@ -691,22 +796,18 @@ function buildExecutionContract(senderJson) {
       mode: 'await_user_choice',
       must_show_message: true,
       user_visible_message:
-        '같은 날짜에 이미 등록된 방문 기록이 있습니다. 지금 하려는 입력이 새 방문을 새로 등록하는 것인지, 아니면 이미 등록된 그 방문 기록에 내용을 이어서 추가/수정하는 것인지 확인이 필요합니다.',
+        '같은 날짜에 이미 등록된 방문 기록이 있습니다. 숫자만 입력해 주세요.',
       must_ask_user: true,
-      user_question: '기존 기록에 이어서 수정/추가로 진행할까요?',
-      accepted_input_type: 'choice',
-      accepted_choices: [
-        {
-          label: '기존 기록에 이어서 수정/추가',
-          value: 'confirm_existing_visit_update'
-        },
-        {
-          label: '새 방문으로 새로 등록 유지',
-          value: 'keep_new_visit_claim'
-        }
-      ],
+      user_question:
+        '1. 기존 기록에 이어서 수정/추가로 진행\n2. 새 방문으로 유지(자동 진행 중단)',
+      accepted_input_type: 'single_number_choice',
+      allowed_numbers: [1, 2],
+      number_meanings: {
+        '1': 'confirm_existing_visit_update',
+        '2': 'keep_new_visit_claim'
+      },
       allowed_actions: [
-        'ask_single_confirmation_question',
+        'ask_single_number_choice',
         'patch_previous_payload',
         'resend_after_user_answer'
       ],
@@ -727,15 +828,22 @@ function buildExecutionContract(senderJson) {
   ) {
     return {
       contract_version: '1.0',
-      mode: 'await_user_input',
+      mode: 'await_user_choice',
       must_show_message: true,
-      user_visible_message: '입력한 patient_id로는 기존 환자 기록을 찾지 못했습니다.',
+      user_visible_message:
+        '입력한 patient_id로는 기존 환자 기록을 찾지 못했습니다. 숫자만 입력해 주세요.',
       must_ask_user: true,
-      user_question: '수정된 6자리 patient_id만 다시 입력해 주세요.',
-      accepted_input_type: 'patient_id',
-      accepted_format: '6_digit_string',
+      user_question:
+        '1. patient_id 다시 입력\n2. 취소',
+      accepted_input_type: 'single_number_choice',
+      allowed_numbers: [1, 2],
+      number_meanings: {
+        '1': 'reenter_patient_id',
+        '2': 'cancel'
+      },
       allowed_actions: [
-        'ask_only_patient_id',
+        'ask_single_number_choice',
+        'ask_only_patient_id_after_choice_1',
         'patch_previous_payload',
         'resend_after_user_answer'
       ],
@@ -843,6 +951,8 @@ async function runTransformTool(args) {
   requireObject(args.payload, 'args.payload');
 
   const result = transformCanonicalPayload(args.payload);
+  const preview_summary = buildPreviewSummary(result.transformed_payload);
+
   return {
     ok: result.status === 'SUCCESS',
     tool: 'sender_transform',
@@ -852,6 +962,9 @@ async function runTransformTool(args) {
     input_hash: result.input_hash,
     transformed_hash: result.transformed_hash,
     transformed_payload: result.transformed_payload,
+    preview_summary,
+    interaction: buildTransformInteraction(),
+    execution_contract: buildTransformExecutionContract(),
     debug: result.debug
   };
 }
