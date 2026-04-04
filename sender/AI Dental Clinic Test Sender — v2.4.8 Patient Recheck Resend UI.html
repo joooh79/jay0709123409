@@ -1,0 +1,1080 @@
+<!DOCTYPE html>
+<!-- saved from url=(0154)file:///private/var/folders/d2/c2dbmgss11x3n3n_5tdyz88c0000gn/T/remote-file-preview-AD636B08-958F-4711-A55D-5F4AC3D0D5B1/AI_Dental_Clinic_JSON_Sender.html -->
+<html lang="ko"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+  
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Dental Clinic Test Sender — v2.4.8 Patient Recheck Resend UI</title>
+  <style>
+    :root { --bg:#f5f7fb; --card:#fff; --line:#d7dce5; --text:#172033; --muted:#667085; --ok:#ecfdf5; --okt:#065f46; --err:#fef2f2; --errt:#991b1b; --info:#eff6ff; --infot:#1d4ed8; --warn:#fffbeb; --warnt:#92400e; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    .wrap { max-width:1500px; margin:0 auto; padding:24px; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:18px; padding:18px; box-shadow:0 10px 30px rgba(15,23,42,.06); margin-bottom:18px; }
+    h1,h2,h3 { margin:0 0 10px; }
+    .sub,.tiny { color:var(--muted); line-height:1.55; }
+    .tiny { font-size:12px; }
+    .row2,.row3,.row4 { display:grid; gap:14px; }
+    .row2 { grid-template-columns:1fr 1fr; }
+    .row3 { grid-template-columns:repeat(3,1fr); }
+    .row4 { grid-template-columns:repeat(4,1fr); }
+    @media (max-width:1100px){ .row4,.row3{grid-template-columns:1fr 1fr;} }
+    @media (max-width:760px){ .row4,.row3,.row2{grid-template-columns:1fr;} }
+    label { display:block; font-size:13px; font-weight:700; margin-bottom:6px; }
+    input,select,textarea { width:100%; border:1px solid var(--line); border-radius:12px; padding:11px 12px; font-size:14px; color:var(--text); background:#fff; }
+    textarea { min-height:180px; resize:vertical; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; line-height:1.45; }
+    .big { min-height:480px; }
+    .med { min-height:280px; }
+    .small { min-height:120px; }
+    .actions { display:flex; flex-wrap:wrap; gap:10px; margin-top:14px; }
+    button { border:0; border-radius:12px; padding:11px 15px; background:#111827; color:#fff; font-weight:700; cursor:pointer; }
+    button.secondary { background:#374151; }
+    button.light { background:#e5e7eb; color:#111827; }
+    button.info { background:#1d4ed8; }
+    button.warn { background:#b45309; }
+    .status { border-radius:12px; padding:12px 14px; min-height:48px; white-space:pre-wrap; background:#f3f4f6; margin-top:12px; }
+    .ok { background:var(--ok); color:var(--okt); }
+    .err { background:var(--err); color:var(--errt); }
+    .infoBox { background:var(--info); color:var(--infot); }
+    .warnBox { background:var(--warn); color:var(--warnt); }
+    .pillrow { display:flex; flex-wrap:wrap; gap:8px; }
+    .pill { padding:6px 10px; border-radius:999px; background:#eef2ff; color:#3730a3; font-size:12px; }
+    .code { border:1px solid var(--line); border-radius:12px; padding:12px; background:#fbfcfe; white-space:pre-wrap; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:13px; line-height:1.45; }
+    .hidden { display:none; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>AI Dental Clinic Test Sender — v2.4.8</h1>
+      <div class="sub">Raw JSON first transformer. Official outbound findings contract is <strong>findings_records[] only</strong>. Each <strong>item.fields</strong> is shaped in sender as an Airtable-safe, branch-ready object. Sender keeps <strong>workflow.mode</strong> blank, never finalizes mode, never infers DB truth, and now applies <strong>global multiple-select normalization</strong> sender-side before preview / send.</div>
+      <div class="pillrow">
+        <div class="pill">findings_records[] only</div>
+        <div class="pill">Airtable-safe item.fields</div>
+        <div class="pill">omit blank unstable fields</div>
+        <div class="pill">numeric preserved</div>
+        <div class="pill">global multi-select shaping</div>
+        <div class="pill">correction / resend compatible</div>
+        <div class="pill">response-mode separation</div>
+        <div class="pill">tooth_cards internal only</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Short build summary</h2>
+      <div class="code">1. Official outbound findings contract stays findings_records[] only.
+2. item.fields is now branch-ready with exact Airtable field names from the embedded Airtable canon.
+3. Blank optional unstable fields are omitted in sender.
+4. Arrays are filtered to real values only.
+5. Numeric fields remain numeric, including Remaining cusp thickness (mm) when non-zero.
+6. Make can now iterate findings_records[], route by branch_code, and minimal-wrap item.fields for Airtable write.
+7. v2.4 adds sender-global multiple-select normalization across covered Airtable multi-select fields before preview / send.
+8. v2.4.8 fixes patient_id re-entry panel rendering for PATIENT_NOT_FOUND_RECHECK_REQUIRED response-mode resend while preserving clinical content.</div>
+    </div>
+
+    <div class="card">
+      <h2>Webhook / correction settings</h2>
+      <div class="row3">
+        <div>
+          <label for="webhookUrl">Webhook URL</label>
+          <input id="webhookUrl" type="text" value="https://hook.eu1.make.com/38cx9ls57f7k3akd6us4hwchrtwfl050">
+        </div>
+        <div>
+          <label for="modeDisplay">Sender mode</label>
+          <input id="modeDisplay" type="text" readonly="" value="">
+          <div class="tiny">Clinical payload output stays hard-locked blank. Response mode is display-only.</div>
+        </div>
+        <div>
+          <label for="manualCorrectionPatientId">Manual correction helper / patient_id re-entry</label>
+          <input id="manualCorrectionPatientId" type="text" maxlength="40" placeholder="response-mode keeps original clinical content; no findings re-entry" readonly="">
+          <div class="tiny">PATIENT_NOT_FOUND_RECHECK_REQUIRED 응답 시 correction panel 안의 입력칸을 사용하세요.</div>
+        </div>
+      </div>
+      <div id="status" class="status "></div>
+    </div>
+
+    <div class="card">
+      <h2>Raw JSON input</h2>
+      <div class="row2">
+        <div>
+          <label for="rawJsonInput">AI raw JSON paste</label>
+          <textarea id="rawJsonInput" class="big" placeholder="Paste canonical / raw JSON here."></textarea>
+        </div>
+        <div>
+          <label for="previewOutput">Official outbound payload preview</label>
+          <textarea id="previewOutput" class="big" readonly=""></textarea>
+        </div>
+      </div>
+      <div class="actions">
+        <button id="parseBtn" class="secondary">Load / Parse</button>
+        <button id="previewBtn" class="info">Preview 생성</button>
+        <button id="sendBtn">전송</button>
+        <button id="downloadBtn" class="secondary">Preview JSON 다운로드</button>
+        <button id="sampleBtn" class="light">샘플 입력</button>
+        <button id="clearBtn" class="light">초기화</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Auto-parsed summaries</h2>
+      <div class="row3">
+        <div>
+          <label>Decision input summary</label>
+          <div id="workflowSummary" class="code small">{
+  "status": "normal_pass",
+  "gate_result": "normal_pass",
+  "correction_needed": false,
+  "hard_stop": false,
+  "reason_code": "",
+  "message": "기존 방문 업데이트가 성공적으로 진행되었습니다.",
+  "write_allowed": true,
+  "resend_allowed": false,
+  "same_date_visit_exists": true,
+  "suggested_correction": {
+    "type": "",
+    "options": []
+  }
+}</div>
+        </div>
+        <div>
+          <label>Patient summary</label>
+          <div id="patientSummary" class="code small">{
+  "patient_id": "910001",
+  "birth_year": "1985",
+  "gender": "Male",
+  "last_dental_visit_date": ""
+}</div>
+        </div>
+        <div>
+          <label>Visit summary</label>
+          <div id="visitSummary" class="code small">{
+  "visit_id": "VISIT-910001-20260410",
+  "date": "2026-04-10",
+  "visit_type": "emergency",
+  "chief_complaint": "existing visit update sparse multi-tooth visible update test",
+  "pain_level": 0
+}</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Internal state inspection</h2>
+      <div class="row2">
+        <div>
+          <label for="toothCardsView">tooth_cards (internal model only)</label>
+          <textarea id="toothCardsView" class="med" readonly=""></textarea>
+        </div>
+        <div>
+          <label for="findingsRecordsView">findings_records (official outbound model)</label>
+          <textarea id="findingsRecordsView" class="med" readonly=""></textarea>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Raw JSON debug / last response</h2>
+      <div class="row2">
+        <div>
+          <label for="debugOutput">Raw JSON debug</label>
+          <textarea id="debugOutput" class="med" readonly=""></textarea>
+        </div>
+        <div>
+          <label for="responseOutput">Last webhook response</label>
+          <textarea id="responseOutput" class="med" readonly=""></textarea>
+        </div>
+      </div>
+    </div>
+
+    <div id="correctionCard" class="card hidden">
+      <h2>Correction / response panel</h2>
+      <div id="correctionSummary" class="code"></div>
+      <div id="patientRecheckBox" class="hidden" style="margin:14px 0;">
+        <label for="manualCorrectionPatientIdPanel">새 patient_id 입력</label>
+        <input id="manualCorrectionPatientIdPanel" type="text" inputmode="numeric" maxlength="6" placeholder="새 patient_id를 입력하세요">
+        <div class="tiny">PATIENT_NOT_FOUND_RECHECK_REQUIRED 응답 시 여기에 patient_id를 다시 입력하세요.</div>
+      </div>
+      <div class="actions">
+        <button id="applySuggestedBtn" class="warn hidden" data-option="">existing_visit_update로 재전송</button>
+        <button id="manualCorrectionBtn" class="secondary hidden" data-option="">keep_new_visit_claim으로 재전송</button>
+        <button id="hideCorrectionBtn" class="light">패널 닫기</button>
+      </div>
+      <div class="tiny">Response mode patches workflow / correction fields only. Original clinical findings content is preserved and reused for resend.</div>
+    </div>
+  </div>
+
+<script>
+const ids = {
+  webhookUrl: document.getElementById('webhookUrl'),
+  modeDisplay: document.getElementById('modeDisplay'),
+  manualCorrectionPatientId: document.getElementById('manualCorrectionPatientId'),
+  manualCorrectionPatientIdPanel: document.getElementById('manualCorrectionPatientIdPanel'),
+  patientRecheckBox: document.getElementById('patientRecheckBox'),
+  rawJsonInput: document.getElementById('rawJsonInput'),
+  previewOutput: document.getElementById('previewOutput'),
+  workflowSummary: document.getElementById('workflowSummary'),
+  patientSummary: document.getElementById('patientSummary'),
+  visitSummary: document.getElementById('visitSummary'),
+  toothCardsView: document.getElementById('toothCardsView'),
+  findingsRecordsView: document.getElementById('findingsRecordsView'),
+  debugOutput: document.getElementById('debugOutput'),
+  responseOutput: document.getElementById('responseOutput'),
+  correctionCard: document.getElementById('correctionCard'),
+  correctionSummary: document.getElementById('correctionSummary'),
+  status: document.getElementById('status'),
+  parseBtn: document.getElementById('parseBtn'),
+  previewBtn: document.getElementById('previewBtn'),
+  sendBtn: document.getElementById('sendBtn'),
+  downloadBtn: document.getElementById('downloadBtn'),
+  sampleBtn: document.getElementById('sampleBtn'),
+  clearBtn: document.getElementById('clearBtn'),
+  applySuggestedBtn: document.getElementById('applySuggestedBtn'),
+  manualCorrectionBtn: document.getElementById('manualCorrectionBtn'),
+  hideCorrectionBtn: document.getElementById('hideCorrectionBtn')
+};
+
+const BRANCH_META = {
+  pre_op: { code:'PRE', label:'Pre-op Clinical Findings' },
+  radiographic: { code:'RAD', label:'Radiographic Findings' },
+  operative: { code:'OP', label:'Operative Findings' },
+  diagnosis: { code:'DX', label:'Diagnosis' },
+  treatment_plan: { code:'PLAN', label:'Treatment Plan' },
+  doctor_reasoning: { code:'DR', label:'Doctor Reasoning' }
+};
+
+
+const MULTI_SELECT_ALLOWED = {
+  "Symptom": ["cold sensitivity","bite pain","pain on release","chewing pain","spontaneous pain","none"],
+  "Crack detection method": ["visual","transillumination","bite test","photo magnification","N/A"],
+  "Caries location": ["mesial","distal","occlusal","cervical","root","N/A"],
+  "Crack location": ["mesial marginal ridge","distal marginal ridge","central groove","buccal","palatal","unknown","N/A"],
+  "Structural diagnosis": ["intact tooth","primary caries","secondary caries","cracked tooth","cusp fracture","split tooth","root fracture","N/A"],
+  "Decision factor": ["remaining cusp thickness","functional cusp involvement","crack depth","caries depth","pulp status","occlusion","subgingival margin","N/A"]
+};
+
+const EXACT_FIELDS = {
+  pre_op: [
+    ['Record name',['record_name']],
+    ['Visit ID',['visit_id']],
+    ['Tooth number',['tooth_number']],
+    ['Symptom',['symptom','symptom_1','symptom_2','symptom_3','symptom_4']],
+    ['Symptom reproducible',['symptom_reproducible']],
+    ['Visible crack',['visible_crack']],
+    ['Crack detection method',['crack_detection_method','crack_detection_method_1','crack_detection_method_2','crack_detection_method_3']],
+    ['Pulp - cold test',['pulp_cold_test','pulp_-_cold_test']],
+    ['Pulp - EPT',['pulp_ept','pulp_-_ept']],
+    ['Functional Cusp - involvement',['functional_cusp_involvement','functional_cusp_-_involvement']],
+    ['existing restorations',['existing_restorations']],
+    ['Existing restoration size',['existing_restoration_size']],
+    ['Occlusal wear',['occlusal_wear']],
+    ['Structure estimation - suspected cusp thin?',['suspected_cusp_thin','structure_estimation_suspected_cusp_thin','structure_estimate_suspected_cusp_thin']],
+    ['Margin estimation - suspected subgingival margin',['suspected_subgingival_margin','margin_estimation_suspected_subgingival_margin']],
+    ['Rubber Dam Feasibility',['rubber_dam_feasibility']]
+  ],
+  radiographic: [
+    ['Record name',['record_name']],
+    ['Visit ID',['visit_id']],
+    ['Tooth number',['tooth_number']],
+    ['Radiograph type',['radiograph_type']],
+    ['Radiographic caries depth',['radiographic_caries_depth']],
+    ['Secondary caries',['secondary_caries']],
+    ['Caries location',['caries_location','caries_location_1','caries_location_2','caries_location_3']],
+    ['Pulp chamber size',['pulp_chamber_size']],
+    ['Periapical lesion',['periapical_lesion']],
+    ['Radiographic fracture sign',['radiographic_fracture_sign']],
+    ['Radiograph link',['radiograph_link']]
+  ],
+  operative: [
+    ['Record name',['record_name']],
+    ['Visit ID',['visit_id']],
+    ['Tooth number',['tooth_number']],
+    ['Rubber dam isolation',['rubber_dam_isolation']],
+    ['Caries depth (actual)',['caries_depth_actual']],
+    ['Soft dentin remaining',['soft_dentin_remaining']],
+    ['Crack confirmed',['crack_confirmed']],
+    ['Crack location',['crack_location','crack_location_1','crack_location_2','crack_location_3']],
+    ['Remaining cusp thickness (mm)',['remaining_cusp_thickness_mm']],
+    ['Subgingival margin',['subgingival_margin']],
+    ['Deep marginal elevation',['deep_marginal_elevation','deep_margin_elevation']],
+    ['IDS/resin coating',['ids_resin_coating']],
+    ['Resin core build up type',['resin_core_build_up_type','core_build_up']],
+    ['Occlusal loading test',['occlusal_loading_test']],
+    ['Loading test result',['loading_test_result']],
+    ['Intraoral photo link',['intraoral_photo_link']]
+  ],
+  diagnosis: [
+    ['Record name',['record_name']],
+    ['Visit ID',['visit_id']],
+    ['Tooth number',['tooth_number']],
+    ['Structural diagnosis',['structural_diagnosis','structural_diagnosis_1','structural_diagnosis_2','structural_diagnosis_3']],
+    ['Pulp diagnosis',['pulp_diagnosis']],
+    ['Crack severity',['crack_severity']],
+    ['Occlusal risk',['occlusal_risk','occlusion_risk']],
+    ['Restorability',['restorability']]
+  ],
+  treatment_plan: [
+    ['Record name',['record_name']],
+    ['Visit ID',['visit_id']],
+    ['Tooth number',['tooth_number']],
+    ['Pulp therapy',['pulp_therapy']],
+    ['Restoration design',['restoration_design']],
+    ['Restoration material',['restoration_material']],
+    ['Implant placement',['implant_placement']],
+    ['Scan file link',['scan_file_link','scan_stl_link']]
+  ],
+  doctor_reasoning: [
+    ['Record name',['record_name']],
+    ['Visit ID',['visit_id']],
+    ['Tooth number',['tooth_number']],
+    ['Decision factor',['decision_factor','decision_factor_1','decision_factor_2','decision_factor_3','decision_factor_4','decision_factor_5','decision_factor_6']],
+    ['Remaining cusp thickness decision',['remaining_cusp_thickness_decision']],
+    ['Functional cusp involvement',['functional_cusp_involvement']],
+    ['Crack progression risk',['crack_progression_risk']],
+    ['Occlusal risk',['occlusal_risk']],
+    ['Reasoning notes',['reasoning_notes']]
+  ]
+};
+
+let state = { raw:null, internal:null, payload:null, correction:null, response_mode:false, response:null, clinical_snapshot:null };
+
+function setStatus(type, message) {
+  ids.status.className = 'status ' + (type || '');
+  ids.status.textContent = message || '';
+}
+function clearStatus() { setStatus('', ''); }
+function isPlainObject(v) { return typeof v === 'object' && v !== null && !Array.isArray(v); }
+function notBlank(v) { return v !== '' && v !== null && v !== undefined; }
+function exact6Digits(v) { return /^\d{6}$/.test(String(v || '').trim()); }
+function validDate(v) { return /^\d{4}-\d{2}-\d{2}$/.test(String(v || '')); }
+function clone(v) { return JSON.parse(JSON.stringify(v)); }
+function responseModeLabel() { return state.response_mode ? 'response_mode' : 'clinical_mode'; }
+function rememberClinicalSnapshot() {
+  if (!state.internal || !state.payload) return;
+  state.clinical_snapshot = {
+    raw: clone(state.raw),
+    internal: clone(state.internal),
+    payload: clone(state.payload)
+  };
+}
+function isMakeResponseShape(raw) {
+  if (!isPlainObject(raw)) return false;
+  const responseKeys = ['status','gate_result','correction_needed','hard_stop','reason_code','message','write_allowed','resend_allowed','same_date_visit_exists','suggested_correction'];
+  return responseKeys.some(k => Object.prototype.hasOwnProperty.call(raw, k));
+}
+function normalizeResponseObject(raw) {
+  const suggested = isPlainObject(raw.suggested_correction) ? raw.suggested_correction : {};
+  const options = Array.isArray(suggested.options) ? suggested.options.map(v => String(v || '').trim()).filter(Boolean) : [];
+  return {
+    status: String(raw.status || '').trim(),
+    gate_result: String(raw.gate_result || '').trim(),
+    correction_needed: raw.correction_needed === true,
+    hard_stop: raw.hard_stop === true,
+    reason_code: String(raw.reason_code || '').trim(),
+    message: String(raw.message || '').trim(),
+    write_allowed: raw.write_allowed === true,
+    resend_allowed: raw.resend_allowed === true,
+    same_date_visit_exists: raw.same_date_visit_exists === true,
+    suggested_correction: {
+      type: String(suggested.type || '').trim(),
+      options
+    },
+    raw: clone(raw)
+  };
+}
+function buildResponseSummary(response) {
+  return {
+    status: response.status,
+    gate_result: response.gate_result,
+    correction_needed: response.correction_needed,
+    hard_stop: response.hard_stop,
+    reason_code: response.reason_code,
+    message: response.message,
+    write_allowed: response.write_allowed,
+    resend_allowed: response.resend_allowed,
+    same_date_visit_exists: response.same_date_visit_exists,
+    suggested_correction: {
+      type: response.suggested_correction.type,
+      options: clone(response.suggested_correction.options)
+    }
+  };
+}
+function isPatientRecheckResponse(response) {
+  return !!(response && response.reason_code === 'PATIENT_NOT_FOUND_RECHECK_REQUIRED' && response.resend_allowed === true);
+}
+
+function enterResponseMode(raw) {
+  state.raw = clone(raw);
+  state.response_mode = true;
+  state.response = normalizeResponseObject(raw);
+  state.correction = state.response;
+  renderState();
+  setStatus(state.response.hard_stop || state.response.correction_needed ? 'warnBox' : 'infoBox', 'Response mode loaded. Clinical validators and outbound preview reconstruction were skipped.');
+  return state.response;
+}
+function ymdCompact(date) { return String(date || '').replace(/-/g,''); }
+function deriveVisitId(patientId, date) { return exact6Digits(patientId) && validDate(date) ? `VISIT-${patientId}-${ymdCompact(date)}` : ''; }
+function toArray(v) { return Array.isArray(v) ? v : (notBlank(v) ? [v] : []); }
+function normalizedGender(v) {
+  if (v === 'Male' || v === 'Female') return v;
+  return '';
+}
+function sanitizeScalar(v) {
+  if (Array.isArray(v)) {
+    const arr = v.map(x => typeof x === 'string' ? x.trim() : x).filter(x => x !== '' && x !== null && x !== undefined);
+    return arr.length ? arr : undefined;
+  }
+  if (typeof v === 'string') {
+    const t = v.trim();
+    return t === '' ? undefined : t;
+  }
+  if (typeof v === 'number') {
+    return Number.isFinite(v) ? v : undefined;
+  }
+  if (typeof v === 'boolean') return v;
+  return undefined;
+}
+function readByAliases(src, aliases) {
+  if (!isPlainObject(src)) return undefined;
+  const gathered = [];
+  for (const key of aliases) {
+    const value = src[key];
+    if (Array.isArray(value)) gathered.push(...value);
+    else if (notBlank(value)) gathered.push(value);
+  }
+  if (!gathered.length) return undefined;
+  const filtered = gathered.map(x => typeof x === 'string' ? x.trim() : x).filter(x => x !== '' && x !== null && x !== undefined);
+  if (!filtered.length) return undefined;
+  return filtered.length === 1 ? filtered[0] : filtered;
+}
+function hasMeaningfulBranchData(obj) {
+  if (!isPlainObject(obj)) return false;
+  return Object.keys(obj).some(k => {
+    if (k === 'tooth_number' || k === 'record_name' || k === 'visit_id') return false;
+    const v = obj[k];
+    if (Array.isArray(v)) return v.filter(notBlank).length > 0;
+    if (typeof v === 'number') return Number.isFinite(v) && v !== 0;
+    return notBlank(v);
+  });
+}
+function filterFields(obj) {
+  const out = {};
+  for (const [k, v] of Object.entries(obj || {})) {
+    if (Array.isArray(v)) {
+      const arr = v.map(x => typeof x === 'string' ? x.trim() : x).filter(x => x !== '' && x !== null && x !== undefined);
+      if (arr.length) out[k] = arr;
+      continue;
+    }
+    if (typeof v === 'number') {
+      if (Number.isFinite(v) && !(k === 'Remaining cusp thickness (mm)' && v === 0)) out[k] = v;
+      continue;
+    }
+    if (typeof v === 'boolean') { out[k] = v; continue; }
+    if (typeof v === 'string') {
+      const t = v.trim();
+      if (t !== '') out[k] = t;
+    }
+  }
+  return out;
+}
+function numericOrBlank(v) {
+  if (v === '' || v === null || v === undefined) return undefined;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : undefined;
+}
+function shapeBranchFields(branchKey, body, visitId, toothNumber, recordName) {
+  const map = EXACT_FIELDS[branchKey];
+  const raw = isPlainObject(body) ? body : {};
+  const prepared = { record_name: recordName, visit_id: visitId, tooth_number: toothNumber, ...raw };
+  if (branchKey === 'doctor_reasoning') {
+    const decisionFactors = [];
+    ['decision_factor','decision_factor_1','decision_factor_2','decision_factor_3','decision_factor_4','decision_factor_5','decision_factor_6'].forEach(k => {
+      const v = prepared[k];
+      if (Array.isArray(v)) decisionFactors.push(...v);
+      else if (notBlank(v)) decisionFactors.push(v);
+    });
+    prepared.decision_factor = decisionFactors.map(x => typeof x === 'string' ? x.trim() : x).filter(x => x !== '' && x !== null && x !== undefined);
+  }
+  if (branchKey === 'operative') {
+    const n = numericOrBlank(prepared.remaining_cusp_thickness_mm);
+    if (n !== undefined && n !== 0) prepared.remaining_cusp_thickness_mm = n;
+    else delete prepared.remaining_cusp_thickness_mm;
+  }
+  const out = {};
+  for (const [fieldName, aliases] of map) {
+    const value = readByAliases(prepared, aliases);
+    if (fieldName === 'Remaining cusp thickness (mm)') {
+      const n = numericOrBlank(value);
+      if (n !== undefined && n !== 0) out[fieldName] = n;
+      continue;
+    }
+    const clean = sanitizeScalar(value);
+    if (clean !== undefined) out[fieldName] = clean;
+  }
+  return filterFields(out);
+}
+function normalizeMultiSelectFields(fields) {
+  if (!isPlainObject(fields)) return {};
+  const next = clone(fields);
+  for (const key of Object.keys(next)) {
+    if (!MULTI_SELECT_ALLOWED[key]) continue;
+    const raw = Array.isArray(next[key]) ? next[key] : [next[key]];
+    const normalized = [];
+    raw.forEach(item => {
+      const trimmed = String(item ?? '').trim();
+      if (!trimmed) return;
+      if (!MULTI_SELECT_ALLOWED[key].includes(trimmed)) return;
+      if (!normalized.includes(trimmed)) normalized.push(trimmed);
+    });
+    if (!normalized.length) delete next[key];
+    else next[key] = normalized;
+  }
+  return filterFields(next);
+}
+
+function reverseShapeFromFields(branchKey, fields) {
+  if (!isPlainObject(fields)) return {};
+  const out = {};
+  for (const [fieldName, aliases] of EXACT_FIELDS[branchKey]) {
+    if (!notBlank(fields[fieldName])) continue;
+    const target = aliases[0];
+    out[target] = fields[fieldName];
+  }
+  delete out.record_name; delete out.visit_id; delete out.tooth_number;
+  return out;
+}
+function makeEmptyToothCard(toothNumber) {
+  return {
+    tooth_number: toothNumber,
+    pre_op: {},
+    radiographic: {},
+    operative: {},
+    diagnosis: {},
+    treatment_plan: {},
+    doctor_reasoning: {}
+  };
+}
+function buildToothCardsFromToothCards(arr) {
+  return toArray(arr).map(card => {
+    const toothNumber = String(card.tooth_number || '').trim();
+    return {
+      tooth_number: toothNumber,
+      pre_op: isPlainObject(card.pre_op) ? clone(card.pre_op) : {},
+      radiographic: isPlainObject(card.radiographic) ? clone(card.radiographic) : {},
+      operative: isPlainObject(card.operative) ? clone(card.operative) : {},
+      diagnosis: isPlainObject(card.diagnosis) ? clone(card.diagnosis) : {},
+      treatment_plan: isPlainObject(card.treatment_plan) ? clone(card.treatment_plan) : {},
+      doctor_reasoning: normalizeDoctorReasoning(card.doctor_reasoning)
+    };
+  }).filter(card => notBlank(card.tooth_number));
+}
+function normalizeDoctorReasoning(v) {
+  if (typeof v === 'string') return v.trim() ? { reasoning_notes: v.trim() } : {};
+  return isPlainObject(v) ? clone(v) : {};
+}
+function buildToothCardsFromFindingsRecords(records) {
+  const byTooth = {};
+  toArray(records).forEach(item => {
+    if (!isPlainObject(item)) return;
+    const branchKey = item.branch_key;
+    if (!BRANCH_META[branchKey]) return;
+    const toothNumber = String(item.tooth_number || item?.fields?.['Tooth number'] || '').trim();
+    if (!toothNumber) return;
+    if (!byTooth[toothNumber]) byTooth[toothNumber] = makeEmptyToothCard(toothNumber);
+    if (isPlainObject(item.fields)) {
+      byTooth[toothNumber][branchKey] = reverseShapeFromFields(branchKey, item.fields);
+    }
+  });
+  return Object.values(byTooth);
+}
+function buildToothCardsFromLegacy(raw) {
+  const byTooth = {};
+  Object.keys(BRANCH_META).forEach(branchKey => {
+    const section = raw[branchKey];
+    if (Array.isArray(section)) {
+      section.forEach(entry => {
+        if (!isPlainObject(entry)) return;
+        const toothNumber = String(entry.tooth_number || raw?.sender_debug_support?.support_tooth_number || '').trim();
+        if (!toothNumber) return;
+        if (!byTooth[toothNumber]) byTooth[toothNumber] = makeEmptyToothCard(toothNumber);
+        byTooth[toothNumber][branchKey] = branchKey === 'doctor_reasoning' ? normalizeDoctorReasoning(entry) : clone(entry);
+      });
+      return;
+    }
+    if (isPlainObject(section) && hasMeaningfulBranchData(section)) {
+      const toothNumber = String(section.tooth_number || raw?.sender_debug_support?.support_tooth_number || '').trim();
+      if (!toothNumber) return;
+      if (!byTooth[toothNumber]) byTooth[toothNumber] = makeEmptyToothCard(toothNumber);
+      byTooth[toothNumber][branchKey] = branchKey === 'doctor_reasoning' ? normalizeDoctorReasoning(section) : clone(section);
+    }
+  });
+  return Object.values(byTooth);
+}
+function deriveToothCards(raw) {
+  if (Array.isArray(raw.tooth_cards) && raw.tooth_cards.length) return buildToothCardsFromToothCards(raw.tooth_cards);
+  if (Array.isArray(raw.findings_records) && raw.findings_records.length) return buildToothCardsFromFindingsRecords(raw.findings_records);
+  return buildToothCardsFromLegacy(raw);
+}
+function deriveFindingsPresent(toothCards) {
+  const present = { pre_op:false, radiographic:false, operative:false, diagnosis:false, treatment_plan:false, doctor_reasoning:false };
+  toothCards.forEach(card => {
+    Object.keys(present).forEach(branchKey => {
+      if (hasMeaningfulBranchData(card[branchKey])) present[branchKey] = true;
+    });
+  });
+  return present;
+}
+function deriveFindingsRecords(internal) {
+  const visitId = internal.visits.visit_id;
+  const items = [];
+  const seen = new Set();
+  internal.tooth_cards.forEach(card => {
+    const toothNumber = String(card.tooth_number || '').trim();
+    if (!toothNumber) return;
+    Object.entries(BRANCH_META).forEach(([branchKey, meta]) => {
+      const body = card[branchKey];
+      if (!hasMeaningfulBranchData(body)) return;
+      const recordName = `${visitId}-${toothNumber}-${meta.code}`;
+      const fields = normalizeMultiSelectFields(shapeBranchFields(branchKey, body, visitId, toothNumber, recordName));
+      if (Object.keys(fields).length <= 3) return;
+      const uniq = `${visitId}::${toothNumber}::${meta.code}`;
+      if (seen.has(uniq)) return;
+      seen.add(uniq);
+      items.push({
+        branch_key: branchKey,
+        branch_code: meta.code,
+        branch_label: meta.label,
+        visit_id: visitId,
+        tooth_number: toothNumber,
+        record_name: recordName,
+        fields
+      });
+    });
+  });
+  return items;
+}
+function validateInternal(internal) {
+  if (!exact6Digits(internal.patients.patient_id)) throw new Error('patients.patient_id must be exact 6 digits.');
+  if (!validDate(internal.visits.date)) throw new Error('visits.date must be valid YYYY-MM-DD.');
+  if (!notBlank(internal.workflow.patient_status_claim)) throw new Error('workflow.patient_status_claim is required.');
+  if (!notBlank(internal.workflow.visit_intent_claim)) throw new Error('workflow.visit_intent_claim is required.');
+  if (notBlank(internal.workflow.target_visit_date) && !validDate(internal.workflow.target_visit_date)) throw new Error('workflow.target_visit_date must be valid YYYY-MM-DD when provided.');
+  if (!['', 'Male', 'Female'].includes(internal.patients.gender)) throw new Error('patients.gender must be Male, Female, or empty string.');
+  if (!Object.values(internal.findings_present).some(Boolean)) throw new Error('Send blocked: all findings branches are empty.');
+  if (!Array.isArray(internal.findings_records) || !internal.findings_records.length) throw new Error('Send blocked: findings_records[] is empty.');
+}
+function parseRawJson() {
+  const text = ids.rawJsonInput.value.trim();
+  if (!text) throw new Error('Raw JSON is empty.');
+  const raw = JSON.parse(text);
+  if (!isPlainObject(raw)) throw new Error('Top-level JSON must be an object.');
+  if (isMakeResponseShape(raw)) {
+    return enterResponseMode(raw);
+  }
+  const workflowIn = isPlainObject(raw.workflow) ? raw.workflow : {};
+  const patientsIn = isPlainObject(raw.patients) ? raw.patients : {};
+  const visitsIn = isPlainObject(raw.visits) ? raw.visits : {};
+  const patientId = String(patientsIn.patient_id || '').trim();
+  const visitDate = String(visitsIn.date || '').trim();
+  const internal = {
+    workflow: {
+      mode: '',
+      patient_status_claim: String(workflowIn.patient_status_claim || '').trim(),
+      visit_intent_claim: String(workflowIn.visit_intent_claim || '').trim(),
+      target_visit_date: String(workflowIn.target_visit_date || '').trim(),
+      target_visit_id: String(workflowIn.target_visit_id || '').trim(),
+      target_visit_clue: String(workflowIn.target_visit_clue || '').trim(),
+      uncertainty_note: String(workflowIn.uncertainty_note || '').trim(),
+      patient_recheck_attempted: workflowIn.patient_recheck_attempted === true ? true : workflowIn.patient_recheck_attempted === false ? false : String(workflowIn.patient_recheck_attempted || '').trim(),
+      correction_applied: workflowIn.correction_applied === true ? true : undefined,
+      correction_case: String(workflowIn.correction_case || '').trim(),
+      doctor_confirmed_correction: workflowIn.doctor_confirmed_correction === true ? true : workflowIn.doctor_confirmed_correction === false ? false : undefined,
+      correction_source: String(workflowIn.correction_source || '').trim()
+    },
+    patients: {
+      patient_id: patientId,
+      birth_year: String(patientsIn.birth_year || '').trim(),
+      gender: normalizedGender(patientsIn.gender || ''),
+      last_dental_visit_date: String(patientsIn.last_dental_visit_date || '').trim()
+    },
+    visits: {
+      visit_id: String(visitsIn.visit_id || '').trim() || deriveVisitId(patientId, visitDate),
+      date: visitDate,
+      visit_type: String(visitsIn.visit_type || '').trim(),
+      chief_complaint: String(visitsIn.chief_complaint || '').trim(),
+      pain_level: visitsIn.pain_level === '' || visitsIn.pain_level === null || visitsIn.pain_level === undefined ? '' : Number(visitsIn.pain_level)
+    },
+    sender_debug_support: isPlainObject(raw.sender_debug_support) ? clone(raw.sender_debug_support) : {},
+    tooth_cards: deriveToothCards(raw)
+  };
+  internal.findings_present = deriveFindingsPresent(internal.tooth_cards);
+  internal.findings_records = deriveFindingsRecords(internal);
+  validateInternal(internal);
+  state.raw = clone(raw);
+  state.internal = internal;
+  state.payload = buildOutboundPayload(internal);
+  state.correction = null;
+  state.response_mode = false;
+  state.response = null;
+  rememberClinicalSnapshot();
+  renderState();
+  setStatus('ok', 'Clinical mode parse success. Internal state reconstructed, global multi-select normalization applied, and official outbound payload generated.');
+  return internal;
+}
+
+function buildOutboundPayload(internal) {
+  const workflow = {
+    mode: '',
+    patient_status_claim: internal.workflow.patient_status_claim,
+    visit_intent_claim: internal.workflow.visit_intent_claim,
+    target_visit_date: internal.workflow.target_visit_date,
+    target_visit_id: internal.workflow.target_visit_id,
+    target_visit_clue: internal.workflow.target_visit_clue,
+    uncertainty_note: internal.workflow.uncertainty_note,
+    patient_recheck_attempted: internal.workflow.patient_recheck_attempted
+  };
+  if (internal.workflow.doctor_confirmed_correction !== undefined) workflow.doctor_confirmed_correction = internal.workflow.doctor_confirmed_correction;
+  const patients = filterFields({
+    patient_id: internal.patients.patient_id,
+    birth_year: internal.patients.birth_year,
+    gender: internal.patients.gender,
+    last_dental_visit_date: internal.patients.last_dental_visit_date
+  });
+  const visits = filterFields({
+    visit_id: internal.visits.visit_id,
+    date: internal.visits.date,
+    visit_type: internal.visits.visit_type,
+    chief_complaint: internal.visits.chief_complaint,
+    pain_level: internal.visits.pain_level === '' ? undefined : internal.visits.pain_level
+  });
+  const payload = {
+    workflow,
+    patients,
+    visits,
+    findings_present: clone(internal.findings_present),
+    findings_records: clone(internal.findings_records),
+    record_name_rule: '{Visit ID}-{Tooth number}-{BRANCH CODE}',
+    record_name_generation_source: 'sender_deterministic'
+  };
+  if (isPlainObject(internal.sender_debug_support) && Object.keys(filterFields(internal.sender_debug_support)).length) {
+    payload.sender_debug_support = filterFields(internal.sender_debug_support);
+  }
+  return payload;
+}
+function renderState() {
+  ids.modeDisplay.value = responseModeLabel();
+  if (state.response_mode && state.response) {
+    ids.workflowSummary.textContent = JSON.stringify(buildResponseSummary(state.response), null, 2);
+    ids.patientSummary.textContent = state.clinical_snapshot?.internal ? JSON.stringify(state.clinical_snapshot.internal.patients, null, 2) : '';
+    ids.visitSummary.textContent = state.clinical_snapshot?.internal ? JSON.stringify(state.clinical_snapshot.internal.visits, null, 2) : '';
+    ids.toothCardsView.value = state.clinical_snapshot?.internal ? JSON.stringify(state.clinical_snapshot.internal.tooth_cards, null, 2) : '';
+    ids.findingsRecordsView.value = state.clinical_snapshot?.internal ? JSON.stringify(state.clinical_snapshot.internal.findings_records, null, 2) : '';
+    ids.previewOutput.value = state.clinical_snapshot?.payload ? JSON.stringify(state.clinical_snapshot.payload, null, 2) : '';
+    ids.debugOutput.value = JSON.stringify({ raw_input: state.raw, response_mode: true, preserved_clinical_available: !!state.clinical_snapshot }, null, 2);
+    ids.responseOutput.value = JSON.stringify(state.response.raw, null, 2);
+    renderResponsePanel();
+    return;
+  }
+  ids.workflowSummary.textContent = JSON.stringify(state.internal.workflow, null, 2);
+  ids.patientSummary.textContent = JSON.stringify(state.internal.patients, null, 2);
+  ids.visitSummary.textContent = JSON.stringify(state.internal.visits, null, 2);
+  ids.toothCardsView.value = JSON.stringify(state.internal.tooth_cards, null, 2);
+  ids.findingsRecordsView.value = JSON.stringify(state.internal.findings_records, null, 2);
+  ids.previewOutput.value = JSON.stringify(state.payload, null, 2);
+  ids.debugOutput.value = JSON.stringify({ raw_input: state.raw, internal_state: state.internal, response_mode: false }, null, 2);
+  renderResponsePanel();
+}
+
+function ensurePayload() {
+  if (state.response_mode) {
+    if (state.clinical_snapshot?.payload) return clone(state.clinical_snapshot.payload);
+    throw new Error('Response mode has no preserved clinical payload yet. Load clinical JSON first or send once before resending.');
+  }
+  if (!state.payload) parseRawJson();
+  return state.payload;
+}
+function downloadPreview() {
+  const payload = ensurePayload();
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type:'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'ai_dental_clinic_sender_preview_v2_4_8_patient_recheck_resend_ui_fix.json';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+async function sendPayload(payload) {
+  const webhookUrl = ids.webhookUrl.value.trim();
+  if (!webhookUrl) throw new Error('Webhook URL is empty.');
+  rememberClinicalSnapshot();
+  const res = await fetch(webhookUrl, {
+    method:'POST',
+    headers:{ 'Content-Type':'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const text = await res.text();
+  let parsed = null;
+  try { parsed = text ? JSON.parse(text) : null; } catch (e) {}
+  ids.responseOutput.value = parsed ? JSON.stringify(parsed, null, 2) : text;
+  if (parsed && isMakeResponseShape(parsed)) {
+    enterResponseMode(parsed);
+  } else {
+    ids.correctionCard.classList.add('hidden');
+    state.correction = null;
+  }
+  if (!res.ok) throw new Error(`Webhook HTTP ${res.status}`);
+  setStatus('ok', 'Send complete.');
+}
+function renderResponsePanel() {
+  const response = state.response_mode ? state.response : state.correction;
+  if (!response || (!response.correction_needed && !response.hard_stop && !response.suggested_correction?.options?.length)) {
+    ids.correctionCard.classList.add('hidden');
+    ids.correctionSummary.textContent = '';
+    ids.applySuggestedBtn.classList.add('hidden');
+    ids.manualCorrectionBtn.classList.add('hidden');
+    ids.applySuggestedBtn.dataset.option = '';
+    ids.manualCorrectionBtn.dataset.option = '';
+    ids.manualCorrectionPatientId.value = state.response_mode ? 'response-mode keeps original clinical content; no findings re-entry' : '';
+    ids.manualCorrectionPatientId.readOnly = true;
+    ids.manualCorrectionPatientId.placeholder = 'response-mode keeps original clinical content; no findings re-entry';
+    if (ids.patientRecheckBox) ids.patientRecheckBox.classList.add('hidden');
+    if (ids.manualCorrectionPatientIdPanel) ids.manualCorrectionPatientIdPanel.value = '';
+    return;
+  }
+  ids.correctionSummary.textContent = JSON.stringify(buildResponseSummary(response), null, 2);
+  ids.correctionCard.classList.remove('hidden');
+  const options = Array.isArray(response.suggested_correction?.options) ? response.suggested_correction.options : [];
+  const labels = {
+    existing_visit_update: 'existing_visit_update로 재전송',
+    keep_new_visit_claim: 'keep_new_visit_claim으로 재전송'
+  };
+  ids.applySuggestedBtn.classList.add('hidden');
+  ids.manualCorrectionBtn.classList.add('hidden');
+  ids.applySuggestedBtn.dataset.option = '';
+  ids.manualCorrectionBtn.dataset.option = '';
+  ids.manualCorrectionPatientId.readOnly = true;
+  ids.manualCorrectionPatientId.placeholder = 'response-mode keeps original clinical content; no findings re-entry';
+  ids.manualCorrectionPatientId.value = state.response_mode ? 'response-driven correction; findings preserved for resend' : '';
+  if (ids.patientRecheckBox) ids.patientRecheckBox.classList.add('hidden');
+  if (ids.manualCorrectionPatientIdPanel) ids.manualCorrectionPatientIdPanel.value = '';
+
+  if (isPatientRecheckResponse(response)) {
+    ids.manualCorrectionPatientId.readOnly = false;
+    ids.manualCorrectionPatientId.value = '';
+  if (ids.manualCorrectionPatientIdPanel) ids.manualCorrectionPatientIdPanel.value = '';
+    ids.manualCorrectionPatientId.placeholder = '새 patient_id를 입력하세요';
+    if (ids.patientRecheckBox) ids.patientRecheckBox.classList.remove('hidden');
+    if (ids.manualCorrectionPatientIdPanel) ids.manualCorrectionPatientIdPanel.value = '';
+    ids.manualCorrectionBtn.textContent = 'patient_id 수정 후 재전송';
+    ids.manualCorrectionBtn.dataset.option = 'patient_recheck_manual';
+    ids.manualCorrectionBtn.classList.remove('hidden');
+    return;
+  }
+
+  const buttons = [ids.applySuggestedBtn, ids.manualCorrectionBtn];
+  buttons.forEach((btn, index) => {
+    const option = options[index];
+    if (!option) return;
+    btn.dataset.option = option;
+    btn.textContent = labels[option] || `${option}로 재전송`;
+    btn.classList.remove('hidden');
+  });
+}
+function applyResponseOption(option) {
+  const base = state.clinical_snapshot?.internal || state.internal;
+  if (!base) throw new Error('No preserved clinical content available for resend.');
+  if (!state.response) throw new Error('No response-mode state available.');
+  const nextInternal = clone(base);
+  if (option === 'existing_visit_update') {
+    nextInternal.workflow.doctor_confirmed_correction = true;
+    nextInternal.workflow.visit_intent_claim = 'existing_visit_update';
+    if (!notBlank(nextInternal.workflow.target_visit_date) && validDate(nextInternal.visits.date)) nextInternal.workflow.target_visit_date = nextInternal.visits.date;
+  } else if (option === 'keep_new_visit_claim') {
+    nextInternal.workflow.doctor_confirmed_correction = false;
+    if (!notBlank(nextInternal.workflow.visit_intent_claim)) {
+      throw new Error('Preserved resend state is missing workflow.visit_intent_claim. Resend blocked at sender.');
+    }
+  } else {
+    throw new Error('Unsupported resend option.');
+  }
+  nextInternal.findings_records = deriveFindingsRecords(nextInternal);
+  validateInternal(nextInternal);
+  state.internal = nextInternal;
+  state.payload = buildOutboundPayload(nextInternal);
+  rememberClinicalSnapshot();
+  state.response_mode = false;
+  renderState();
+  return state.payload;
+}
+function applyPatientRecheckResend() {
+  const base = state.clinical_snapshot?.internal || state.internal;
+  if (!base) throw new Error('No preserved clinical content available for resend.');
+  if (!state.response || !isPatientRecheckResponse(state.response)) throw new Error('Patient recheck response state is not active.');
+  const nextInternal = clone(base);
+  const nextPatientId = String((ids.manualCorrectionPatientIdPanel?.value || ids.manualCorrectionPatientId.value || '')).trim();
+  if (!/^\d{6}$/.test(nextPatientId)) throw new Error('patient_id는 6자리 숫자여야 합니다.');
+  nextInternal.patients.patient_id = nextPatientId;
+  nextInternal.workflow.patient_recheck_attempted = true;
+  nextInternal.visits.visit_id = deriveVisitId(nextInternal.patients.patient_id, nextInternal.visits.date) || nextInternal.visits.visit_id;
+  nextInternal.findings_records = deriveFindingsRecords(nextInternal);
+  validateInternal(nextInternal);
+  state.internal = nextInternal;
+  state.payload = buildOutboundPayload(nextInternal);
+  rememberClinicalSnapshot();
+  state.response_mode = false;
+  renderState();
+  return state.payload;
+}
+
+function applyCorrectionPatch(mode) {
+  const option = mode === 'suggested' ? ids.applySuggestedBtn.dataset.option : ids.manualCorrectionBtn.dataset.option;
+  if (state.response_mode && option === 'patient_recheck_manual') return applyPatientRecheckResend();
+  if (state.response_mode && option) return applyResponseOption(option);
+  if (!state.internal || !state.correction) throw new Error('No correction state available.');
+  const nextInternal = clone(state.internal);
+  const corr = state.correction;
+  nextInternal.workflow.doctor_confirmed_correction = true;
+  if (mode === 'suggested') {
+    const patch = isPlainObject(corr.resend_patch) ? corr.resend_patch : {};
+    if (notBlank(patch.patient_id)) nextInternal.patients.patient_id = String(patch.patient_id).trim();
+    if (notBlank(patch.patient_status_claim)) nextInternal.workflow.patient_status_claim = String(patch.patient_status_claim).trim();
+    if (notBlank(patch.visit_intent_claim)) nextInternal.workflow.visit_intent_claim = String(patch.visit_intent_claim).trim();
+    if (patch.patient_recheck_attempted === true || patch.patient_recheck_attempted === false || notBlank(patch.patient_recheck_attempted)) nextInternal.workflow.patient_recheck_attempted = patch.patient_recheck_attempted;
+  }
+  if (mode === 'manual') {
+    throw new Error('Response-mode separation fix removed manual patient_id resend for this path. Use response-driven resend options.');
+  }
+  nextInternal.visits.visit_id = deriveVisitId(nextInternal.patients.patient_id, nextInternal.visits.date) || nextInternal.visits.visit_id;
+  nextInternal.findings_records = deriveFindingsRecords(nextInternal);
+  validateInternal(nextInternal);
+  state.internal = nextInternal;
+  state.payload = buildOutboundPayload(nextInternal);
+  rememberClinicalSnapshot();
+  renderState();
+  return state.payload;
+}
+
+function sampleInput() {
+  ids.rawJsonInput.value = JSON.stringify({
+    workflow: {
+      mode: 'existing_patient_new_visit',
+      patient_status_claim: 'existing_patient',
+      visit_intent_claim: 'new_visit',
+      target_visit_date: '',
+      target_visit_id: '',
+      target_visit_clue: '',
+      uncertainty_note: '',
+      patient_recheck_attempted: ''
+    },
+    patients: {
+      patient_id: '901710',
+      birth_year: '1988',
+      gender: 'Male',
+      last_dental_visit_date: '2025-11-21'
+    },
+    visits: {
+      date: '2026-03-22',
+      visit_type: 'recall',
+      chief_complaint: '36 bite pain',
+      pain_level: 4
+    },
+    tooth_cards: [
+      {
+        tooth_number: '36',
+        pre_op: {
+          symptom: 'bite pain',
+          symptom_reproducible: 'yes',
+          visible_crack: 'suspected',
+          crack_detection_method: 'transillumination',
+          pulp_cold_test: 'sensitive',
+          existing_restorations: 'composite'
+        },
+        radiographic: {
+          radiograph_type: 'bitewing',
+          radiographic_caries_depth: 'middle dentin',
+          secondary_caries: 'suspected'
+        },
+        operative: {
+          rubber_dam_isolation: 'isolated',
+          crack_confirmed: 'dentin crack',
+          remaining_cusp_thickness_mm: 1.2,
+          occlusal_loading_test: 'performed',
+          loading_test_result: 'partial relief'
+        },
+        diagnosis: {
+          structural_diagnosis: 'cracked tooth',
+          pulp_diagnosis: 'reversible pulpitis',
+          crack_severity: 'dentin crack',
+          restorability: 'restorable'
+        },
+        treatment_plan: {
+          pulp_therapy: 'none',
+          restoration_design: 'onlay',
+          restoration_material: 'e.max'
+        },
+        doctor_reasoning: {
+          decision_factor_1: 'remaining cusp thickness',
+          decision_factor_2: 'crack depth',
+          remaining_cusp_thickness_decision: '<1.5 mm cusp coverage',
+          functional_cusp_involvement: 'yes',
+          crack_progression_risk: 'high',
+          reasoning_notes: '36 functional cusp thin and crack extends into dentin.'
+        }
+      },
+      {
+        tooth_number: '37',
+        pre_op: {
+          symptom: 'cold sensitivity',
+          visible_crack: 'none',
+          pulp_cold_test: 'normal'
+        },
+        diagnosis: {
+          structural_diagnosis: 'primary caries',
+          pulp_diagnosis: 'normal pulp',
+          restorability: 'restorable'
+        },
+        treatment_plan: {
+          restoration_design: 'direct composite',
+          restoration_material: 'composite'
+        }
+      }
+    ],
+    sender_debug_support: {
+      support_tooth_number: '36'
+    }
+  }, null, 2);
+  clearStatus();
+}
+function clearAll() {
+  ids.rawJsonInput.value = '';
+  ids.previewOutput.value = '';
+  ids.workflowSummary.textContent = '';
+  ids.patientSummary.textContent = '';
+  ids.visitSummary.textContent = '';
+  ids.toothCardsView.value = '';
+  ids.findingsRecordsView.value = '';
+  ids.debugOutput.value = '';
+  ids.responseOutput.value = '';
+  ids.manualCorrectionPatientId.value = '';
+  if (ids.manualCorrectionPatientIdPanel) ids.manualCorrectionPatientIdPanel.value = '';
+  ids.correctionSummary.textContent = '';
+  ids.correctionCard.classList.add('hidden');
+  ids.modeDisplay.value = '';
+  state = { raw:null, internal:null, payload:null, correction:null, response_mode:false, response:null, clinical_snapshot:null };
+  clearStatus();
+}
+
+ids.parseBtn.addEventListener('click', () => { try { parseRawJson(); } catch (e) { setStatus('err', e.message); } });
+ids.previewBtn.addEventListener('click', () => { try { ensurePayload(); setStatus('ok', 'Preview updated with v2.4 global multiple-select normalization.'); } catch (e) { setStatus('err', e.message); } });
+ids.downloadBtn.addEventListener('click', () => { try { downloadPreview(); setStatus('ok', 'Preview JSON downloaded.'); } catch (e) { setStatus('err', e.message); } });
+ids.sendBtn.addEventListener('click', async () => { try { const payload = ensurePayload(); await sendPayload(payload); } catch (e) { setStatus('err', e.message); } });
+ids.applySuggestedBtn.addEventListener('click', async () => { try { const payload = applyCorrectionPatch('suggested'); await sendPayload(payload); } catch (e) { setStatus('err', e.message); } });
+ids.manualCorrectionBtn.addEventListener('click', async () => { try { const payload = applyCorrectionPatch('manual'); await sendPayload(payload); } catch (e) { setStatus('err', e.message); } });
+ids.manualCorrectionPatientIdPanel?.addEventListener('input', () => { ids.manualCorrectionPatientId.value = ids.manualCorrectionPatientIdPanel.value; });
+ids.hideCorrectionBtn.addEventListener('click', () => ids.correctionCard.classList.add('hidden'));
+ids.sampleBtn.addEventListener('click', sampleInput);
+ids.clearBtn.addEventListener('click', clearAll);
+
+sampleInput();
+</script>
+
+
+</body></html>

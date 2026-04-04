@@ -1,0 +1,1097 @@
+AI DENTAL CLINIC AUTOMATION — MASTER SYSTEM
+FINAL
+
+This document is the bible of the AI Dental Clinic Automation subsystem.
+
+It is not the constitution of the whole project.
+It operates under:
+- Foundation Canon
+- Document Hierarchy Definition
+- SAG governance
+
+Its purpose is to:
+- fix automation structure
+- define automation workflow and constraints
+- define canonical JSON behavior
+- define sender / webhook / Make / Airtable architecture
+- define the higher-level lock for sender-stage and live-state gating behavior
+- define where active sender runtime identity and implementation reference are recorded when relevant
+- embed Airtable structure and option mapping rules into one locked automation source
+
+==================================================
+1. SYSTEM GOAL
+==================================================
+
+Receive doctor voice/text briefing
+→ generate canonical JSON
+→ sender transforms canonical JSON into Airtable-ready fragments
+→ webhook delivers to one integrated Make scenario
+→ Airtable stores the structured records
+
+==================================================
+2. CORE ARCHITECTURE
+==================================================
+
+- input: doctor briefing (voice / text)
+- processing: AI → canonical JSON generation
+- transformation: sender → fragment transformation
+- delivery: webhook → one Make scenario
+- storage: Airtable
+- live-state verification surface when relevant: current-state MCP
+
+Fixed components:
+- sender baseline: 1 primary baseline governed by operational protocol
+- webhook: 1
+- make scenario: 1
+
+==================================================
+2A. SENDER BASELINE REFERENCE RULE
+==================================================
+
+The primary sender execution baseline for the automation system is governed by:
+- AI_Dental_Clinic_MCP_Sender_v2_Operational_Protocol.txt
+
+Interpretation:
+- sender operational choreography
+- preview-before-send behavior
+- sender-side interaction rules
+- sender resend rules
+- sender success / correction / hard-stop handling
+must follow the MCP Sender v2 operational protocol unless SAG explicitly locks a different baseline.
+
+Legacy note:
+- AI_Dental_Clinic_JSON_Sender.html may remain as a legacy/manual fallback artifact
+- it is not the primary operational baseline after the MCP sender transition
+
+==================================================
+2C. SENDER RUNTIME AND IMPLEMENTATION REFERENCE RULE
+==================================================
+
+The active runtime identity and implementation reference for the primary sender baseline are maintained in:
+- AI_Dental_Clinic_MCP_Sender_v2_Runtime_Record.txt
+- AI_Dental_Clinic_MCP_Sender_v2_Implementation_Reference.txt
+
+Interpretation:
+- operational behavior is governed by the MCP Sender v2 operational protocol
+- public endpoint identity and deployment-facing runtime reference are governed by the runtime record
+- code-artifact identity is governed by the implementation reference
+- the automation core should not rely on informal room memory for active sender endpoint identity
+
+==================================================
+2B. CURRENT-STATE VERIFICATION REFERENCE RULE
+==================================================
+
+When execution safety, live-state gating, current stored findings state, or current Make/Airtable state matters,
+the current-state operating baseline is governed by:
+- AI_Dental_Clinic_Current_State_MCP_Operational_Protocol.txt
+
+Interpretation:
+- current-state MCP rules define the primary live verification surface
+- snapshot TXT/JSON visibility artifacts remain approved continuity/reference surfaces when relevant
+- live current-state and snapshot artifact review must not be collapsed into one concept
+
+==================================================
+3. WORKFLOW MODES
+==================================================
+
+The automation system allows only 3 modes:
+1. new_patient_new_visit
+2. existing_patient_new_visit
+3. existing_visit_update
+
+==================================================
+4. MODE DECISION LOGIC
+==================================================
+
+- new patient + new visit → new_patient_new_visit
+- existing patient + new visit → existing_patient_new_visit
+- existing patient + existing visit update → existing_visit_update
+
+If one axis is unclear:
+- JSON generation prohibited
+- clarification required first
+
+
+==================================================
+4A. ROUTE EXECUTION VALIDATION RULE
+==================================================
+
+Workflow mode determines the intended route candidate,
+but it does not by itself authorize blind downstream execution.
+
+Required rule:
+- sender must validate required route-identifying fields before delivery
+- Make must perform execution safety checks before route entry or write
+- missing route-identifying requirements may block, re-check, or correction-route the case
+- mode resolution alone is not sufficient justification for blind downstream execution
+
+==================================================
+4B. EXECUTION-READY SAMPLE GATING RULE
+==================================================
+
+If an execution-ready sample JSON, send-ready sample JSON, or validation sample depends on live Airtable state for correct meaning, safe routing, or meaningful update validation, current-state gating must be checked before the sample is treated as execution-ready.
+
+Lock:
+- sample readiness must not be declared from workflow.mode interpretation alone when live-state gating is relevant
+- explanatory route reasoning does not replace current-state validation
+- live-state-dependent sample approval requires the relevant Airtable precheck first
+
+Default efficient current-state rule:
+- patient-only gate → patient:{patient_id}
+- patient + visit_date gate → bundle:{patient_id}:{visit_date}
+- existing_visit_update gate → confirm target visit existence first
+
+==================================================
+5. VISIT / PATIENT SAFETY RULES
+==================================================
+
+- patient_id alone must not determine patient status
+- Dentweb patient_id may exist for both new and existing patients
+- if patient status is unclear, ask first
+- if visit status is unclear, ask first
+- for existing_visit_update, prefer visit date before visit_id
+- visit_id in normal workflow is derived, not directly demanded from the doctor
+
+
+
+==================================================
+5A. VISIT EVENT VS CURRENT BRIEFING INTENT CLARIFICATION RULE
+==================================================
+
+The actual patient visit event and the current doctor briefing moment are separate.
+
+Workflow mode classification must consider:
+1. patient status
+2. visit recording intent
+
+Interpretation lock:
+- new visit means the doctor is now recording that visit event for the first time in the system
+- existing_visit_update means the doctor is now updating, correcting, or completing a visit event that has already been recorded
+- existing_visit_update does not mean the patient physically visited again on that same date
+
+Operational consequence:
+- same-date Airtable existence is important routing evidence
+- but same-date existence alone does not fully define the doctor’s current briefing intent
+- current-state existence and current briefing intent must not be collapsed into one concept
+
+==================================================
+6. DATA FLOW
+==================================================
+
+doctor briefing
+→ automation master prompt
+→ canonical JSON
+→ sender
+→ webhook
+→ Make scenario
+→ Airtable
+
+==================================================
+7. FINDINGS STRUCTURE
+==================================================
+
+All findings are parallel branches:
+- pre_op
+- radiographic
+- operative
+- diagnosis
+- treatment_plan
+- doctor_reasoning
+
+==================================================
+8. FINDINGS EXECUTION RULE
+==================================================
+
+Each branch executes only if:
+- the corresponding *_fields_json fragment is not empty
+- and it contains at least one valid field
+
+Otherwise:
+- branch execution prohibited
+
+==================================================
+9. MINIMUM FINDING RULE
+==================================================
+
+If all findings sections are effectively empty:
+- JSON generation prohibited
+- briefing considered insufficient
+
+==================================================
+10. PATIENT ID RULE
+==================================================
+
+patients.patient_id:
+- exact 6-digit Dentweb chart number
+- no prefix
+- no suffix
+- no format alteration
+- keep leading zero when present
+
+==================================================
+11. VISIT ID RULE
+==================================================
+
+visit_id format:
+VISIT-{patient_id}-{YYYYMMDD}
+
+Assumption:
+- one visit per patient per date
+
+For existing_visit_update:
+- workflow.target_visit_date should be filled when known
+- workflow.target_visit_id may remain empty
+- visits.visit_id should match the target visit when known
+
+==================================================
+12. VISIT DUPLICATION RULE
+==================================================
+
+Before creating a new visit:
+- search by visit_id
+
+If the same visit_id already exists:
+- Create prohibited
+- route to existing_visit_update or error handling
+
+==================================================
+12A. SAME-DATE VISIT CORRECTION RULE
+==================================================
+
+If:
+- visit_intent_claim = existing_visit_update
+- and same_date_visit_exists = true
+
+Then:
+- gate_decision = NORMAL_PASS
+- same-date correction_required must not be triggered
+
+If:
+- visit_intent_claim = new_visit
+- and same_date_visit_exists = true
+- and doctor_confirmed_correction is empty
+
+Then:
+- gate_decision = CORRECTION_REQUIRED
+
+If:
+- visit_intent_claim = new_visit
+- and same_date_visit_exists = true
+- and doctor_confirmed_correction = true
+
+Then:
+- gate_decision = NORMAL_PASS
+
+Interpretation lock:
+- same-date correction is for intent/search-result mismatch handling
+- it must not override an already-matching existing_visit_update path
+
+==================================================
+12B. EXISTING_VISIT_UPDATE FINDINGS WRITE RULE
+==================================================
+
+During existing_visit_update:
+- findings write must update/upsert the matching existing branch row
+- matching existing branch row must not be treated as a new append target merely because the same Visit ID is being processed again
+- duplicate child-row append behavior is prohibited in validated existing visit update flow
+
+Deterministic identity rule:
+- update targeting should follow the already-resolved existing visit context
+- incoming duplicate visit_id must not be treated as justification for creating duplicate findings rows
+
+==================================================
+12C. SUCCESS RESPONSE HANDLING RULE
+==================================================
+
+When write succeeds:
+- success response should be generated through central gate/result response handling
+- explicit success JSON may be returned to sender
+- branch-local success-response multiplication should be avoided
+
+Preferred direction:
+- central decision/result shaping
+- central webhook response return
+- no unnecessary per-branch response duplication
+
+==================================================
+12D. FINDINGS-CENTERED EXISTING_VISIT_UPDATE VALIDATION RULE
+==================================================
+
+For existing_visit_update validation, the clinically meaningful write target is the findings-level current state, not only route passage or high-level success messaging.
+
+Validation consequence:
+- when findings-level change is the purpose of the test, current stored findings state should be checked first
+- validation should focus on whether the intended branch/tooth/record-level change landed without duplicate append or wrong-target overwrite
+
+==================================================
+12E. ACCEPTED_NO_JSON SUCCESS SHAPE RULE
+==================================================
+
+Under the current Make write-path architecture, the normal write path may return an accepted transport response without structured JSON.
+
+Interpretation:
+- accepted_no_json may represent a normal write-path success shape
+- it must not be treated as failure by default when Make execution success and Airtable write success are consistent with the current validated architecture
+
+==================================================
+13. PATIENT SEARCH FAIL RULE
+==================================================
+
+If patient search returns 0 in:
+- existing_patient_new_visit
+- existing_visit_update
+
+Then:
+- automatic fallback to new_patient_new_visit prohibited
+- re-check or error handling required
+
+==================================================
+13A. ONE-TIME PATIENT ID RECHECK RULE
+==================================================
+
+If:
+- patient_status_claim = existing_patient
+- and patient search result = 0
+
+Then:
+- automatic fallback remains prohibited
+- automatic new-patient conversion remains prohibited
+- write remains prohibited
+- preserved payload may be maintained
+- one-time patient_id recheck may be returned
+
+First fail behavior:
+- correction_required response allowed
+- reason_code = PATIENT_NOT_FOUND_RECHECK_REQUIRED
+- write_allowed = false
+- resend_allowed = true
+
+Second fail behavior:
+- hard_stop required
+- reason_code = PATIENT_NOT_FOUND_RECHECK_FAILED
+- write_allowed = false
+- resend_allowed = false
+
+Lock:
+- this is not automatic fallback
+- this is not automatic patient creation
+- this is one narrow identity recheck layer only
+
+==================================================
+13B. PATIENT RECHECK RESEND PRESERVATION RULE
+==================================================
+
+When sender performs patient_id re-entry resend for the allowed one-time recheck path:
+- clinical content must be preserved
+- correction-only re-entry should be supported without re-briefing the full case
+- workflow.patient_recheck_attempted must reflect the recheck state
+- patients.patient_id, visits.visit_id, findings_records[].visit_id, and findings_records[].record_name must remain consistency-safe after re-entry resend
+- after second-fail hard_stop, resend UI must not remain available for continued retry
+
+==================================================
+13C. BASELINE-FIRST UPDATE VALIDATION RULE
+==================================================
+
+When an update-style execution test or execution-ready update sample is being prepared:
+
+1. current target state should be checked first
+2. the before-state should be preserved as the validation baseline
+3. no-op payloads must not be mistaken for meaningful update validation
+4. after execution, the same target should be re-checked against the preserved baseline
+
+Interpretation lock:
+- successful route passage alone is not sufficient evidence of meaningful update validation
+- update validation should confirm that the intended stored change actually landed
+
+==================================================
+14. JSON GENERATION GATE RULE
+==================================================
+
+JSON may be generated only when all required conditions are satisfied:
+
+1. patient_id exists
+2. patient status resolved
+3. visit status resolved
+4. relevant date exists
+5. at least one findings section contains real clinical data
+
+Otherwise:
+- JSON generation prohibited
+- clarification required first
+
+==================================================
+14A. PREVIEW-FIRST SENDER EXECUTION RULE
+==================================================
+
+Normal sender execution should follow:
+canonical payload prepared
+→ sender_transform
+→ user-visible preview
+→ user confirmation
+→ sender_send
+
+Direct send-first operation is not the preferred normal execution path after the MCP sender transition.
+
+==================================================
+15. CANONICAL JSON CONTRACT RULE
+==================================================
+
+Absolute rules:
+- key rename prohibited
+- key omission prohibited
+- null prohibited
+- unused optional field = ""
+- unused slot = ""
+- N/A filler prohibited unless truly selected as an allowed option
+- numeric fields remain numeric
+
+Special numeric rule:
+- operative.remaining_cusp_thickness_mm = 0 is treated as placeholder / empty unless explicitly confirmed as true data
+
+==================================================
+16. DOCTOR REASONING RULE
+==================================================
+
+- doctor_reasoning branch is always present in the JSON structure
+- decision_factor_1~6 may use only allowed decision factor options
+- if nuance does not fit an exact option, preserve it in reasoning_notes
+- remaining_cusp_thickness_decision allowed values:
+  - >1.5 mm cusp preserved
+  - <1.5 mm cusp coverage
+
+==================================================
+17. FAILURE HANDLING RULE
+==================================================
+
+Immediate stop conditions:
+1. missing patient_id
+2. unresolved patient status
+3. unresolved visit status
+4. patient search fail after allowed re-check is exhausted or unavailable
+5. visit duplication
+6. all findings empty
+
+Prohibited:
+- automatic fallback
+- invented data
+- guessed option values
+
+==================================================
+18. EDIT AUTHORITY LOCK
+==================================================
+
+This document is not revised in the Foundation room.
+
+If revision is needed:
+- issue is proposed to SAG
+- SAG judges whether revision is necessary
+- if approved, SAG revises this document
+- if the issue is actually Foundation-level, SAG escalates to the Foundation room instead
+
+==================================================
+19. EMBEDDED AIRTABLE CANON
+==================================================
+
+SOURCE OF TRUTH
+- Live Airtable base is the only source of truth for Airtable structure and option values.
+- Use exact field names and exact option values from the live base.
+- Dates use YYYY-MM-DD.
+- Patient ID uses Dentweb patient ID.
+- Tooth numbering uses FDI numbering.
+- Link fields are handled in Make using Airtable record IDs.
+- For HTTP JSON bodies, omit optional fields when blank if they cause instability.
+- For multiple select fields, only send slots that contain real values.
+
+------------------------------
+19.1 Patients
+------------------------------
+
+Fields
+1. Patients ID
+2. Birth year
+3. Gender
+4. First visit date
+5. Medical alert
+
+Gender options
+- Male
+- Female
+
+------------------------------
+19.2 Visits
+------------------------------
+
+Fields
+1. Visit ID
+2. Patient ID
+3. Date
+4. Visit type
+5. Chief Complaint
+6. Pain level
+
+Visit type options
+- first visit
+- recall
+- emergency
+
+Visit-level rule
+- One visit record is created per patient per visit date.
+- Visits are visit-level records, not tooth-level records.
+- Pain level remains a visit-level field and must not be split by tooth.
+
+------------------------------
+19.2A Findings Record Identity Rule
+------------------------------
+
+Findings are tooth-level child records under one visit.
+A single visit may contain multiple treated teeth.
+Therefore, each findings table may contain multiple records under the same Visit ID,
+but each record must represent one tooth in one findings branch.
+
+Record name rule
+- Record name = {Visit ID}-{Tooth number}-{BRANCH CODE}
+
+Branch codes
+- Pre-op Clinical Findings = PRE
+- Radiographic Findings = RAD
+- Operative Findings = OP
+- Diagnosis = DX
+- Treatment Plan = PLAN
+- Doctor Reasoning = DR
+
+Examples
+- VISIT-901710-20260321-36-PRE
+- VISIT-901710-20260321-36-RAD
+- VISIT-901710-20260321-36-OP
+- VISIT-901710-20260321-36-DX
+- VISIT-901710-20260321-36-PLAN
+- VISIT-901710-20260321-36-DR
+
+Uniqueness rule
+- Within the same findings table, the combination of Visit ID + Tooth number + Branch Code must be unique.
+- Same visit + same tooth + same findings branch must not create duplicate records.
+- Multi-tooth cases are handled by creating separate tooth-level child records under the same Visit ID.
+
+------------------------------
+19.3 Pre-op Clinical Findings
+------------------------------
+
+Fields
+1. Record name
+2. Visit ID
+3. Tooth number
+4. Symptom
+5. Symptom reproducible
+6. Visible crack
+7. Crack detection method
+8. Pulp - cold test
+9. Pulp - EPT
+10. Functional Cusp - involvement
+11. existing restorations
+12. Existing restoration size
+13. Occlusal wear
+14. Structure estimation - suspected cusp thin?
+15. Margin estimation - suspected subgingival margin
+16. Rubber Dam Feasibility
+
+Symptom options
+- cold sensitivity
+- bite pain
+- pain on release
+- chewing pain
+- spontaneous pain
+- none
+
+Symptom reproducible options
+- yes
+- no
+- not tested
+
+Visible crack options
+- none
+- suspected
+- visible
+
+Crack detection method options
+- visual
+- transillumination
+- bite test
+- photo magnification
+- N/A
+
+Pulp - cold test options
+- normal
+- sensitive
+- lingering
+- none
+- not tested
+
+Pulp - EPT options
+- positive
+- weak
+- negative
+- not tested
+
+Functional Cusp - involvement options
+- yes
+- no
+- uncertain
+
+existing restorations options
+- none
+- composite
+- amalgam
+- gold inlay
+- ceramic inlay/onlay
+- crown
+
+Existing restoration size options
+- small
+- moderate
+- large
+
+Occlusal wear options
+- none
+- mild
+- moderate
+- severe
+
+Structure estimation - suspected cusp thin? options
+- no
+- possible
+- likely
+
+Margin estimation - suspected subgingival margin options
+- no
+- possible
+- clear
+
+Rubber Dam Feasibility options
+- easy
+- difficult
+- impossible
+
+------------------------------
+19.4 Radiographic Findings
+------------------------------
+
+Fields
+1. Record name
+2. Visit ID
+3. Tooth number
+4. Radiograph type
+5. Radiographic caries depth
+6. Secondary caries
+7. Caries location
+8. Pulp chamber size
+9. Periapical lesion
+10. Radiographic fracture sign
+11. Radiograph link
+
+Radiograph type options
+- bitewing
+- periapical
+- panoramic
+- CBCT
+
+Radiographic caries depth options
+- none
+- enamel
+- outer dentin
+- middle dentin
+- deep dentin
+
+Secondary caries options
+- none
+- suspected
+- clear
+
+Caries location options
+- mesial
+- distal
+- occlusal
+- cervical
+- root
+- N/A
+
+Pulp chamber size options
+- large
+- normal
+- narrow
+- very narrow
+
+Periapical lesion options
+- none
+- suspected
+- present
+
+Radiographic fracture sign options
+- none
+- possible fracture
+- clear fracture
+
+------------------------------
+19.5 Operative Findings
+------------------------------
+
+Fields
+1. Record name
+2. Visit ID
+3. Tooth number
+4. Rubber dam isolation
+5. Caries depth (actual)
+6. Soft dentin remaining
+7. Crack confirmed
+8. Crack location
+9. Remaining cusp thickness (mm)
+10. Subgingival margin
+11. Deep marginal elevation
+12. IDS/resin coating
+13. Resin core build up type
+14. Occlusal loading test
+15. Loading test result
+16. Intraoral photo link
+
+Rubber dam isolation options
+- isolated
+- difficult but isolated
+- not possible
+
+Caries depth (actual) options
+- enamel
+- outer dentin
+- middle dentin
+- deep dentin
+- pulp exposure
+
+Soft dentin remaining options
+- none
+- minimal
+- intentional
+
+Crack confirmed options
+- none
+- enamel crack
+- dentin crack
+- deep crack
+- split tooth
+
+Crack location options
+- mesial marginal ridge
+- distal marginal ridge
+- central groove
+- buccal
+- palatal
+- unknown
+- N/A
+
+Subgingival margin options
+- no
+- supragingival
+- slightly subgingival
+- deep subgingival
+
+Deep marginal elevation options
+- not needed
+- performed
+
+IDS/resin coating options
+- none
+- performed
+
+Resin core build up type options
+- none
+- standard core
+- fiber reinforced core
+- standard resin core
+
+Occlusal loading test options
+- not performed
+- performed
+
+Loading test result options
+- complete relief
+- partial relief
+- no change
+- worse
+- N/A
+
+------------------------------
+19.6 Diagnosis
+------------------------------
+
+Fields
+1. Record name
+2. Visit ID
+3. Tooth number
+4. Structural diagnosis
+5. Pulp diagnosis
+6. Crack severity
+7. Occlusion risk
+8. Restorability
+
+Structural diagnosis options
+- intact tooth
+- primary caries
+- secondary caries
+- cracked tooth
+- cusp fracture
+- split tooth
+- root fracture
+- N/A
+
+Pulp diagnosis options
+- normal pulp
+- reversible pulpitis
+- irreversible pulpitis
+- necrotic pulp
+- previously treated
+
+Crack severity options
+- none
+- superficial crack
+- dentin crack
+- deep crack
+- split tooth
+
+Occlusion risk options
+- normal
+- heavy occlusion
+- bruxism suspected
+
+Restorability options
+- restorable
+- questionable
+- non-restorable
+
+------------------------------
+19.7 Treatment Plan
+------------------------------
+
+Fields
+1. Record name
+2. Visit ID
+3. Tooth number
+4. Pulp therapy
+5. Restoration design
+6. Restoration material
+7. Implant placement
+8. Scan file link
+
+Pulp therapy options
+- none
+- VPT
+- RCT
+
+Restoration design options
+- direct composite
+- inlay
+- onlay
+- overlay
+- crown
+- implant crown
+- extraction
+
+Restoration material options
+- composite
+- ultimate
+- e.max
+- zirconia
+- gold
+- none
+
+Implant placement options
+- not planned
+- planned
+- placed
+
+------------------------------
+19.8 Doctor Reasoning
+------------------------------
+
+Fields
+1. Record name
+2. Visit ID
+3. Tooth number
+4. Decision factor
+5. Remaining cusp thickness decision
+6. Functional cusp involvement
+7. Crack progression risk
+8. Occlusal risk
+9. Reasoning notes
+
+Decision factor options
+- remaining cusp thickness
+- functional cusp involvement
+- crack depth
+- caries depth
+- pulp status
+- occlusion
+- subgingival margin
+- N/A
+
+Remaining cusp thickness decision options
+- >1.5 mm cusp preserved
+- <1.5 mm cusp coverage
+
+Functional cusp involvement options
+- yes
+- no
+
+Crack progression risk options
+- low
+- moderate
+- high
+
+Occlusal risk options
+- normal
+- heavy occlusion
+- bruxism suspected
+
+==================================================
+20. EMBEDDED OPTION MAPPING TABLE
+==================================================
+
+GENERAL HARD STOPS
+- If no exact option exists, use "".
+- If certainty does not match an available option, use "".
+- If the phrase is clinically meaningful but not canon-aligned, use "" and preserve nuance in reasoning_notes when appropriate.
+- Do not output approximate variants in option fields.
+
+PATIENT / VISIT
+- "초진", "처음 방문", "new patient" -> new patient
+- "새 방문", "new visit" -> visit status only
+- "기존 방문 업데이트", "지난 방문 이어서" -> existing visit update
+
+PRE-OP
+Symptom
+- "씹을 때 아픔", "씹을 때 시큰", "chewing discomfort" -> chewing pain
+- "bite pain", "물면 아픔" -> bite pain
+- "떼면 아픔", "release pain" -> pain on release
+- "찬물 시림", "cold sensitive" -> cold sensitivity
+- "가만 있어도 아픔", "자발통" -> spontaneous pain
+- "증상 없음" -> none
+
+Symptom reproducible
+- "재현됨", "유발됨" -> yes
+- "재현 안 됨" -> no
+- "테스트 안 함" -> not tested
+
+Visible crack
+- "명확히 보임" -> visible
+- "의심됨", "있을 것 같음" -> suspected
+- "안 보임", "없음" -> none
+
+Crack detection method
+- "육안" -> visual
+- "투조" -> transillumination
+- "bite test", "tooth slooth" -> bite test
+- "확대 사진" -> photo magnification
+- "해당 없음" -> N/A
+
+Pulp - cold test
+- "정상 반응" -> normal
+- "과민", "예민" -> sensitive
+- "잔통", "오래 감" -> lingering
+- "반응 없음" -> none
+- "안 했음" -> not tested
+- "애매함", "불명확" -> ""
+
+Pulp - EPT
+- "양성", "반응 있음" -> positive
+- "약한 반응" -> weak
+- "반응 없음" -> negative
+- "안 했음" -> not tested
+
+Functional Cusp - involvement
+- "포함", "관련 있음" -> yes
+- "아님", "관련 없음" -> no
+- "애매함", "불확실" -> uncertain
+
+existing restorations
+- "없음" -> none
+- "레진", "composite" -> composite
+- "아말감" -> amalgam
+- "금 인레이" -> gold inlay
+- "세라믹 인레이", "세라믹 온레이", "ceramic inlay", "ceramic onlay" -> ceramic inlay/onlay
+- "크라운" -> crown
+- "기존 인레이" -> "" unless material is known
+
+RADIOGRAPHIC
+- "법랑질" -> enamel
+- "상아질 외측 1/3" -> outer dentin
+- "상아질 중간 1/3" -> middle dentin
+- "깊은 상아질" -> deep dentin
+- "근심" -> mesial
+- "원심" -> distal
+- "교합면" -> occlusal
+- "치경부" -> cervical
+- "치근면" -> root
+
+OPERATIVE
+- "격리됨" -> isolated
+- "어렵지만 격리" -> difficult but isolated
+- "불가" -> not possible
+- "법랑질 균열" -> enamel crack
+- "상아질 균열" -> dentin crack
+- "깊은 균열" -> deep crack
+- "근심 변연융선" -> mesial marginal ridge
+- "원심 변연융선" -> distal marginal ridge
+- "중심구" -> central groove
+- "협측" -> buccal
+- "구개측", "설측" -> palatal
+
+DIAGNOSIS
+- "1차 우식" -> primary caries
+- "2차 우식" -> secondary caries
+- "균열치" -> cracked tooth
+- "교두 파절" -> cusp fracture
+- "치근 파절" -> root fracture
+- "정상 치수" -> normal pulp
+- "가역성 치수염" -> reversible pulpitis
+- "비가역성 치수염" -> irreversible pulpitis
+- "치수 괴사" -> necrotic pulp
+- "기존 근관치료" -> previously treated
+
+TREATMENT PLAN
+- "직접 레진" -> direct composite
+- "인레이" -> inlay
+- "온레이" -> onlay
+- "오버레이" -> overlay
+- "크라운" -> crown
+- "발치" -> extraction
+- "레진" -> composite
+- "지르코니아" -> zirconia
+- "골드" -> gold
+
+DOCTOR REASONING
+- "남은 교두 두께" -> remaining cusp thickness
+- "기능교두 포함" -> functional cusp involvement
+- "균열 깊이" -> crack depth
+- "우식 깊이" -> caries depth
+- "치수 상태" -> pulp status
+- "교합" -> occlusion
+- "치은연하 마진" -> subgingival margin
+- "있음" -> yes
+- "없음" -> no
+- "낮음" -> low
+- "중간" -> moderate
+- "높음" -> high
+
+==================================================
+21. PROJECT SOURCE LOCK
+==================================================
+
+Because this document embeds:
+- workflow rules
+- canonical JSON system constraints
+- Airtable structure rules
+- option mapping rules
+
+It functions as the locked bible of the Automation subsystem.
+
+If embedded Airtable or mapping rules change:
+- this document must be revised through SAG
+- subordinate duplicate copies must not remain active
+
+END OF DOCUMENT

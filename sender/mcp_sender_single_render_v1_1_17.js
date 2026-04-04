@@ -1262,6 +1262,365 @@ function buildPhase1Stage1RequiredInput() {
   };
 }
 
+function buildPhase2RegistryRules() {
+  if (buildPhase2RegistryRules.__cache) {
+    return buildPhase2RegistryRules.__cache;
+  }
+
+  const fs = require('fs');
+  const path = require('path');
+  const registryPath = path.join(__dirname, 'PHASE2_FIELD_OPTION_REGISTRY.md');
+  const requiredSections = [
+    'Visits',
+    'Pre-op Clinical Findings',
+    'Radiographic Findings',
+    'Operative Findings',
+    'Diagnosis',
+    'Treatment Plan',
+    'Doctor Reasoning'
+  ];
+  const requiredSectionSet = new Set(requiredSections);
+
+  const fail = (message) => {
+    const errorResult = {
+      __load_error: {
+        reason_code: 'SELECTABLE_REGISTRY_LOAD_ERROR',
+        section: '',
+        branch_code: '',
+        field: '',
+        expected_type: 'registry_markdown',
+        received_type: 'unavailable',
+        invalid_value: registryPath,
+        offending_values: [],
+        error: message
+      }
+    };
+    buildPhase2RegistryRules.__cache = errorResult;
+    return errorResult;
+  };
+
+  let markdown = '';
+  try {
+    markdown = fs.readFileSync(registryPath, 'utf8');
+  } catch (error) {
+    return fail(`Failed to read selectable validation registry: ${error.message}`);
+  }
+
+  const rules = {};
+  let currentSection = '';
+
+  for (const line of markdown.split(/\r?\n/)) {
+    const headingMatch = line.match(/^##\s+(.+?)\s*$/);
+    if (headingMatch) {
+      const heading = headingMatch[1].trim();
+      currentSection = requiredSectionSet.has(heading) ? heading : '';
+      if (currentSection) {
+        rules[currentSection] ||= {};
+      }
+      continue;
+    }
+
+    if (!currentSection) continue;
+
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('|')) continue;
+
+    const cells = trimmed
+      .split('|')
+      .slice(1, -1)
+      .map((cell) => cell.trim());
+
+    if (cells.length < 4) continue;
+    if (cells[0] === 'Field' && cells[1] === 'Type') continue;
+    if (cells.every((cell) => /^-+$/.test(cell.replace(/\s+/g, '')))) continue;
+
+    const [fieldName, fieldType, allowedCell, validationMode] = cells;
+    if (!fieldName || !fieldType) {
+      return fail(`Malformed registry row in section "${currentSection}"`);
+    }
+
+    const normalizedType = fieldType.trim();
+    const allowedValues = Array.from(allowedCell.matchAll(/`([^`]+)`/g)).map((match) => match[1]);
+
+    if ((normalizedType === 'single_select' || normalizedType === 'multi_select') && allowedValues.length === 0) {
+      return fail(`Missing allowed options for ${currentSection}.${fieldName}`);
+    }
+
+    rules[currentSection][fieldName] = {
+      type: normalizedType,
+      validation_mode: validationMode.trim(),
+      allowed: allowedValues
+    };
+  }
+
+  for (const sectionName of requiredSections) {
+    if (!rules[sectionName] || Object.keys(rules[sectionName]).length === 0) {
+      return fail(`Missing registry section "${sectionName}"`);
+    }
+  }
+
+  buildPhase2RegistryRules.__cache = rules;
+  return rules;
+}
+
+function validateSelectableFieldsAgainstRegistry(transformedPayload, registryRules) {
+  if (registryRules?.__load_error) {
+    return {
+      valid: false,
+      ...registryRules.__load_error
+    };
+  }
+
+  const describeType = (value) => {
+    if (value === undefined) return 'undefined';
+    if (value === null) return 'null';
+    if (Array.isArray(value)) return 'array';
+    return typeof value;
+  };
+
+  const buildValidationError = ({
+    reason_code,
+    section,
+    branch_code = '',
+    field,
+    expected_type,
+    received_type,
+    invalid_value,
+    offending_values = []
+  }) => {
+    let error = `Selectable field validation failed for ${section}.${field}`;
+
+    if (reason_code === 'INVALID_SELECTABLE_FIELD') {
+      error = `Unsupported selectable field for ${section}: "${field}"`;
+    } else if (reason_code === 'INVALID_SELECTABLE_OPTION') {
+      const valueText = offending_values.length > 0
+        ? offending_values.join(', ')
+        : String(invalid_value);
+      error = `Invalid value for ${section}.${field}: "${valueText}"`;
+    } else if (reason_code === 'INVALID_MULTISELECT_TYPE') {
+      error = `Invalid multi-select type for ${section}.${field}: expected array, received ${received_type}`;
+    } else if (reason_code === 'INVALID_SELECTABLE_TYPE') {
+      error = `Invalid type for ${section}.${field}: expected ${expected_type}, received ${received_type}`;
+    }
+
+    return {
+      valid: false,
+      reason_code,
+      section,
+      branch_code,
+      field,
+      expected_type,
+      received_type,
+      invalid_value,
+      offending_values,
+      error
+    };
+  };
+
+  const validateField = ({ section, branchCode = '', fieldName, fieldValue }) => {
+    const sectionRules = registryRules?.[section];
+    if (!sectionRules || typeof sectionRules !== 'object') {
+      return buildValidationError({
+        reason_code: 'SELECTABLE_REGISTRY_LOAD_ERROR',
+        section,
+        branch_code: branchCode,
+        field: fieldName,
+        expected_type: 'registry_section',
+        received_type: 'missing',
+        invalid_value: section,
+        offending_values: []
+      });
+    }
+
+    const fieldRule = sectionRules[fieldName];
+    if (!fieldRule) {
+      return buildValidationError({
+        reason_code: 'INVALID_SELECTABLE_FIELD',
+        section,
+        branch_code: branchCode,
+        field: fieldName,
+        expected_type: 'registry-listed field',
+        received_type: describeType(fieldValue),
+        invalid_value: fieldName,
+        offending_values: []
+      });
+    }
+
+    if (fieldValue === undefined || fieldValue === null) {
+      return null;
+    }
+
+    if (fieldRule.type === 'multiline_text') {
+      return null;
+    }
+
+    if (fieldRule.type === 'single_select') {
+      if (typeof fieldValue !== 'string') {
+        return buildValidationError({
+          reason_code: 'INVALID_SELECTABLE_TYPE',
+          section,
+          branch_code: branchCode,
+          field: fieldName,
+          expected_type: 'string',
+          received_type: describeType(fieldValue),
+          invalid_value: fieldValue,
+          offending_values: []
+        });
+      }
+
+      if (fieldValue === '') return null;
+
+      if (!fieldRule.allowed.includes(fieldValue)) {
+        return buildValidationError({
+          reason_code: 'INVALID_SELECTABLE_OPTION',
+          section,
+          branch_code: branchCode,
+          field: fieldName,
+          expected_type: 'single_select option',
+          received_type: 'string',
+          invalid_value: fieldValue,
+          offending_values: [fieldValue]
+        });
+      }
+
+      return null;
+    }
+
+    if (fieldRule.type === 'multi_select') {
+      if (!Array.isArray(fieldValue)) {
+        return buildValidationError({
+          reason_code: 'INVALID_MULTISELECT_TYPE',
+          section,
+          branch_code: branchCode,
+          field: fieldName,
+          expected_type: 'array',
+          received_type: describeType(fieldValue),
+          invalid_value: fieldValue,
+          offending_values: []
+        });
+      }
+
+      const invalidItems = fieldValue.filter((item) => typeof item !== 'string' || !fieldRule.allowed.includes(item));
+      if (invalidItems.length > 0) {
+        const reasonCode = invalidItems.some((item) => typeof item !== 'string')
+          ? 'INVALID_MULTISELECT_TYPE'
+          : 'INVALID_SELECTABLE_OPTION';
+
+        return buildValidationError({
+          reason_code: reasonCode,
+          section,
+          branch_code: branchCode,
+          field: fieldName,
+          expected_type: 'array<string>',
+          received_type: 'array',
+          invalid_value: invalidItems[0],
+          offending_values: invalidItems
+        });
+      }
+
+      return null;
+    }
+
+    if (fieldRule.type === 'number') {
+      if (typeof fieldValue !== 'number' || !Number.isFinite(fieldValue)) {
+        return buildValidationError({
+          reason_code: 'INVALID_SELECTABLE_TYPE',
+          section,
+          branch_code: branchCode,
+          field: fieldName,
+          expected_type: 'number',
+          received_type: describeType(fieldValue),
+          invalid_value: fieldValue,
+          offending_values: []
+        });
+      }
+
+      return null;
+    }
+
+    if (fieldRule.type === 'url') {
+      if (typeof fieldValue !== 'string') {
+        return buildValidationError({
+          reason_code: 'INVALID_SELECTABLE_TYPE',
+          section,
+          branch_code: branchCode,
+          field: fieldName,
+          expected_type: 'string',
+          received_type: describeType(fieldValue),
+          invalid_value: fieldValue,
+          offending_values: []
+        });
+      }
+
+      if (fieldValue === '') return null;
+      return null;
+    }
+
+    return buildValidationError({
+      reason_code: 'SELECTABLE_REGISTRY_LOAD_ERROR',
+      section,
+      branch_code: branchCode,
+      field: fieldName,
+      expected_type: 'supported registry type',
+      received_type: fieldRule.type,
+      invalid_value: fieldRule.type,
+      offending_values: []
+    });
+  };
+
+  const visitsFieldMap = {
+    visit_type: 'Visit type',
+    chief_complaint: 'Chief Complaint',
+    pain_level: 'Pain level'
+  };
+  const visits = transformedPayload?.visits || {};
+  for (const [payloadField, registryField] of Object.entries(visitsFieldMap)) {
+    if (!(payloadField in visits)) continue;
+    const visitError = validateField({
+      section: 'Visits',
+      fieldName: registryField,
+      fieldValue: visits[payloadField]
+    });
+    if (visitError) return visitError;
+  }
+
+  const findings = Array.isArray(transformedPayload?.findings_records)
+    ? transformedPayload.findings_records
+    : [];
+
+  const tableMap = {
+    'PRE': 'Pre-op Clinical Findings',
+    'RAD': 'Radiographic Findings',
+    'OP': 'Operative Findings',
+    'DX': 'Diagnosis',
+    'PLAN': 'Treatment Plan',
+    'DR': 'Doctor Reasoning'
+  };
+
+  for (const record of findings) {
+    const branchCode = safeString(record?.branch_code);
+    const tableName = tableMap[branchCode];
+    if (!tableName) continue;
+
+    const fields = record?.fields || {};
+    for (const [fieldName, fieldValue] of Object.entries(fields)) {
+      if (fieldName === 'Record name' || fieldName === 'Visit ID' || fieldName === 'Tooth number') {
+        continue;
+      }
+
+      const fieldError = validateField({
+        section: tableName,
+        branchCode,
+        fieldName,
+        fieldValue
+      });
+      if (fieldError) return fieldError;
+    }
+  }
+
+  return { valid: true };
+}
+
 function buildPhase1Stage1ChoiceGuide(stage1Preview) {
   return {
     next_step_type: 'sender_transform',
@@ -1492,26 +1851,28 @@ function buildPhase1FullPreview(transformedPayload, currentState, headerTouched,
     : [];
 
   for (const record of findings) {
-    if (safeString(record?.branch_key) !== 'pre_op') continue;
+    const branchCode = safeString(record?.branch_code);
+    if (!branchCode) continue;
 
     const toothNumber = safeString(record?.tooth_number);
     const fields = record?.fields || {};
     const recordName = safeString(record?.record_name);
+    const branchKey = safeString(record?.branch_key);
 
     for (const [fieldName, incomingValue] of Object.entries(fields)) {
       if (fieldName === 'Record name' || fieldName === 'Visit ID' || fieldName === 'Tooth number') {
         continue;
       }
 
-      const storedBeforeValue = currentStateReliable
+      const storedBeforeValue = currentStateReliable && branchKey === 'pre_op'
         ? getStoredPreOpField(currentState, toothNumber, fieldName, recordName)
         : '(current-state unavailable)';
-      const rowResolution = currentStateReliable
+      const rowResolution = currentStateReliable && branchKey === 'pre_op'
         ? getStoredPreOpRowResolution(currentState, toothNumber, recordName)
         : 'unresolved';
-      const pendingRowCreation = currentStateReliable && rowResolution === 'unresolved';
+      const pendingRowCreation = currentStateReliable && branchKey === 'pre_op' && rowResolution === 'unresolved';
       const beforeValue = pendingRowCreation ? '(new row)' : storedBeforeValue;
-      const changeKey = `pre_op.${toothNumber}.${fieldName}`;
+      const changeKey = `${branchKey}.${toothNumber}.${fieldName}`;
       const policy = resolveFieldPolicy(changeKey, fieldName, decision);
 
       let afterValue;
@@ -1529,11 +1890,11 @@ function buildPhase1FullPreview(transformedPayload, currentState, headerTouched,
       const noOp = pendingRowCreation
         ? false
         : currentStateReliable
-          ? valuesEqual(storedBeforeValue, afterValue, 'pre_op', fieldName)
+          ? valuesEqual(storedBeforeValue, afterValue, branchKey, fieldName)
         : false;
 
       findingsChanges.push({
-        branch: 'pre_op',
+        branch: branchKey,
         tooth_number: toothNumber,
         record_name: recordName,
         field: fieldName,
@@ -1613,13 +1974,18 @@ function buildPhase1FullPreview(transformedPayload, currentState, headerTouched,
 function buildSenderExecutionMetadata(headerTouched, stage2Preview, decision) {
   const grouped = {};
 
+  const branchGrouping = {};
+
   for (const change of stage2Preview.findings_changes || []) {
+    const branch = safeString(change.branch);
+    branchGrouping[branch] ||= {};
+
     const toothNumber = safeString(change.tooth_number);
-    grouped[toothNumber] ||= {
+    branchGrouping[branch][toothNumber] ||= {
       record_name: change.record_name || '',
       fields: {}
     };
-    grouped[toothNumber].fields[change.field] = !change.no_op;
+    branchGrouping[branch][toothNumber].fields[change.field] = !change.no_op;
   }
 
   const headerFlags = {
@@ -1643,13 +2009,16 @@ function buildSenderExecutionMetadata(headerTouched, stage2Preview, decision) {
     }
   }
 
+  const findingsUpdateFlags = {};
+  for (const [branch, teeth] of Object.entries(branchGrouping)) {
+    findingsUpdateFlags[branch] = teeth;
+  }
+
   return {
     route: 'existing_visit_update',
     update_scope: stage2Preview?.route_summary?.update_scope || 'findings_only',
     header_update_flags: headerFlags,
-    findings_update_flags: {
-      pre_op: grouped
-    },
+    findings_update_flags: findingsUpdateFlags,
     preview_decision_trace: {
       two_stage_preview_used: true,
       multiple_override_stage_used: true,
@@ -1716,19 +2085,19 @@ function extractPhase1DecisionForTransform(rawDecision) {
 
 function buildPhase1ExecutionPayload(transformedPayload, stage2Preview, headerTouched, decision) {
   const finalPayload = deepClone(transformedPayload);
-  const findingsByTooth = {};
+  const findingsByRecordName = {};
 
   for (const change of stage2Preview.findings_changes || []) {
-    const toothNumber = safeString(change.tooth_number);
-    findingsByTooth[toothNumber] ||= {};
-    findingsByTooth[toothNumber][change.field] = change.after;
+    const recordName = safeString(change.record_name);
+    if (!recordName) continue;
+
+    findingsByRecordName[recordName] ||= {};
+    findingsByRecordName[recordName][change.field] = change.after;
   }
 
   finalPayload.findings_records = finalPayload.findings_records.map((record) => {
-    if (safeString(record?.branch_key) !== 'pre_op') return record;
-
-    const toothNumber = safeString(record?.tooth_number);
-    const patch = findingsByTooth[toothNumber];
+    const recordName = safeString(record?.record_name);
+    const patch = findingsByRecordName[recordName];
     if (!patch) return record;
 
     return {
@@ -1773,6 +2142,56 @@ async function buildPhase1TransformEnvelope(payload, transformResult, phase1Deci
   const transformedPayload = transformResult.transformed_payload;
   const headerTouched = detectHeaderTouchedFields(transformedPayload);
   const findingsTouched = detectFindingsTouchedFields(transformedPayload);
+
+  const registryRules = buildPhase2RegistryRules();
+  const validationResult = validateSelectableFieldsAgainstRegistry(transformedPayload, registryRules);
+
+  if (!validationResult.valid) {
+    return {
+      ok: false,
+      tool: 'sender_transform',
+      request_id: transformResult.request_id,
+      status: 'ERROR',
+      stage: 'PHASE2_SELECTABLE_VALIDATION_FAILED',
+      input_hash: transformResult.input_hash,
+      transformed_hash: transformResult.transformed_hash,
+      transformed_payload: transformResult.transformed_payload,
+      error: {
+        code: validationResult.reason_code || 'SELECTABLE_FIELD_VALIDATION_ERROR',
+        message: validationResult.error || 'Selectable field validation failed',
+        details: {
+          reason_code: validationResult.reason_code || 'SELECTABLE_FIELD_VALIDATION_ERROR',
+          section: validationResult.section || '',
+          branch_code: validationResult.branch_code || '',
+          field: validationResult.field || '',
+          expected_type: validationResult.expected_type || '',
+          received_type: validationResult.received_type || '',
+          invalid_value: validationResult.invalid_value,
+          offending_values: Array.isArray(validationResult.offending_values)
+            ? validationResult.offending_values
+            : []
+        }
+      },
+      debug: {
+        ...transformResult.debug,
+        phase2_validation_applied: true,
+        validation_error: validationResult.error,
+        validation_details: {
+          reason_code: validationResult.reason_code || 'SELECTABLE_FIELD_VALIDATION_ERROR',
+          section: validationResult.section || '',
+          branch_code: validationResult.branch_code || '',
+          field: validationResult.field || '',
+          expected_type: validationResult.expected_type || '',
+          received_type: validationResult.received_type || '',
+          invalid_value: validationResult.invalid_value,
+          offending_values: Array.isArray(validationResult.offending_values)
+            ? validationResult.offending_values
+            : []
+        }
+      }
+    };
+  }
+
   const currentState = await buildExistingVisitUpdateCurrentState(transformedPayload);
 
   if (!currentState.ready && currentState.fatal) {
@@ -3834,16 +4253,66 @@ async function runTransformTool(args) {
   requireObject(args, 'args');
   requireObject(args.payload, 'args.payload');
 
+  const transformInputPayload = args.payload;
+  const result = transformCanonicalPayload(transformInputPayload);
+
+  const registryRules = buildPhase2RegistryRules();
+  const validationResult = validateSelectableFieldsAgainstRegistry(result.transformed_payload, registryRules);
+
+  if (!validationResult.valid) {
+    return {
+      ok: false,
+      tool: 'sender_transform',
+      request_id: result.request_id,
+      status: 'ERROR',
+      stage: 'PHASE2_SELECTABLE_VALIDATION_FAILED',
+      input_hash: result.input_hash,
+      transformed_hash: result.transformed_hash,
+      transformed_payload: result.transformed_payload,
+      error: {
+        code: validationResult.reason_code || 'SELECTABLE_FIELD_VALIDATION_ERROR',
+        message: validationResult.error || 'Selectable field validation failed',
+        details: {
+          reason_code: validationResult.reason_code || 'SELECTABLE_FIELD_VALIDATION_ERROR',
+          section: validationResult.section || '',
+          branch_code: validationResult.branch_code || '',
+          field: validationResult.field || '',
+          expected_type: validationResult.expected_type || '',
+          received_type: validationResult.received_type || '',
+          invalid_value: validationResult.invalid_value,
+          offending_values: Array.isArray(validationResult.offending_values)
+            ? validationResult.offending_values
+            : []
+        }
+      },
+      debug: {
+        ...result.debug,
+        phase2_validation_applied: true,
+        validation_error: validationResult.error,
+        validation_details: {
+          reason_code: validationResult.reason_code || 'SELECTABLE_FIELD_VALIDATION_ERROR',
+          section: validationResult.section || '',
+          branch_code: validationResult.branch_code || '',
+          field: validationResult.field || '',
+          expected_type: validationResult.expected_type || '',
+          received_type: validationResult.received_type || '',
+          invalid_value: validationResult.invalid_value,
+          offending_values: Array.isArray(validationResult.offending_values)
+            ? validationResult.offending_values
+            : []
+        }
+      }
+    };
+  }
+
   const replacementPatientId = extractNewPatientPatientFoundReplacementPatientId(args.phase1_decision);
   const downstreamPhaseDecision = replacementPatientId
     ? clearNewPatientPatientFoundReentryState(args.phase1_decision)
     : args.phase1_decision;
-  const transformInputPayload =
-    isNewPatientNewVisitPayload(args.payload) && replacementPatientId
-      ? applyNewPatientPatientFoundReplacementPatientId(args.payload, replacementPatientId)
-      : args.payload;
-
-  const result = transformCanonicalPayload(transformInputPayload);
+  const transformInputPayloadWithReplacement =
+    isNewPatientNewVisitPayload(transformInputPayload) && replacementPatientId
+      ? applyNewPatientPatientFoundReplacementPatientId(transformInputPayload, replacementPatientId)
+      : transformInputPayload;
 
   if (isPhase1ApplicableExistingVisitUpdate(transformInputPayload)) {
     return buildPhase1TransformEnvelope(transformInputPayload, result, args.phase1_decision);
@@ -3851,7 +4320,7 @@ async function runTransformTool(args) {
 
   const newPatientConflictEnvelope =
     await buildNewPatientPatientFoundTransformEnvelope(
-      transformInputPayload,
+      transformInputPayloadWithReplacement,
       result,
       args.phase1_decision
     );
@@ -3908,6 +4377,89 @@ async function runSendTool(args) {
   }
 
   let transformResult = transformCanonicalPayload(effectiveInputPayload);
+
+  const registryRules = buildPhase2RegistryRules();
+  const validationResult = validateSelectableFieldsAgainstRegistry(transformResult.transformed_payload, registryRules);
+
+  if (!validationResult.valid) {
+    return {
+      ok: false,
+      tool: 'sender_send',
+      request_id: transformResult.request_id,
+      status: 'ERROR',
+      stage: 'PHASE2_SELECTABLE_VALIDATION_FAILED',
+      result_type: 'selectable_field_validation_error',
+      message: validationResult.error || 'Selectable field validation failed',
+      write_allowed: false,
+      resend_allowed: false,
+      reason_code: validationResult.reason_code || 'SELECTABLE_FIELD_VALIDATION_ERROR',
+      make_status: '',
+      gate_result: 'selectable_field_validation_error',
+      data: { same_date_visit_exists: null, suggested_correction: null },
+      input_hash: transformResult.input_hash,
+      transformed_hash: transformResult.transformed_hash,
+      transformed_payload: transformResult.transformed_payload,
+      make_response_raw: '',
+      make_response_parsed: null,
+      transport: {},
+      error: {
+        code: validationResult.reason_code || 'SELECTABLE_FIELD_VALIDATION_ERROR',
+        message: validationResult.error || 'Selectable field validation failed',
+        details: {
+          reason_code: validationResult.reason_code || 'SELECTABLE_FIELD_VALIDATION_ERROR',
+          section: validationResult.section || '',
+          branch_code: validationResult.branch_code || '',
+          field: validationResult.field || '',
+          expected_type: validationResult.expected_type || '',
+          received_type: validationResult.received_type || '',
+          invalid_value: validationResult.invalid_value,
+          offending_values: Array.isArray(validationResult.offending_values)
+            ? validationResult.offending_values
+            : []
+        }
+      },
+      interaction: {
+        mode: 'inform',
+        ui_kind: 'error',
+        user_message: validationResult.error || 'Selectable field validation failed',
+        assistant_question: '',
+        required_user_input: null,
+        do_not_ask: []
+      },
+      resend_plan: null,
+      execution_contract: {
+        contract_version: '1.0',
+        mode: 'stop',
+        must_show_message: true,
+        user_visible_message: validationResult.error || 'Selectable field validation failed',
+        must_ask_user: false,
+        user_question: '',
+        accepted_input_type: null,
+        allowed_actions: ['show_error_message'],
+        forbidden_actions: ['auto_send_without_validation'],
+        auto_resend_allowed: false,
+        stop_after_response: true
+      },
+      debug: {
+        ...transformResult.debug,
+        phase2_validation_applied: true,
+        validation_error: validationResult.error,
+        validation_details: {
+          reason_code: validationResult.reason_code || 'SELECTABLE_FIELD_VALIDATION_ERROR',
+          section: validationResult.section || '',
+          branch_code: validationResult.branch_code || '',
+          field: validationResult.field || '',
+          expected_type: validationResult.expected_type || '',
+          received_type: validationResult.received_type || '',
+          invalid_value: validationResult.invalid_value,
+          offending_values: Array.isArray(validationResult.offending_values)
+            ? validationResult.offending_values
+            : []
+        }
+      }
+    };
+  }
+
   let outboundPayload = transformResult.transformed_payload;
 
   if (isNewPatientNewVisitPayload(effectiveInputPayload)) {
