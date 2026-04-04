@@ -1503,26 +1503,33 @@ function buildPhase1FullPreview(transformedPayload, currentState, headerTouched,
         continue;
       }
 
-      const beforeValue = currentStateReliable
+      const storedBeforeValue = currentStateReliable
         ? getStoredPreOpField(currentState, toothNumber, fieldName, recordName)
         : '(current-state unavailable)';
       const rowResolution = currentStateReliable
         ? getStoredPreOpRowResolution(currentState, toothNumber, recordName)
         : 'unresolved';
+      const pendingRowCreation = currentStateReliable && rowResolution === 'unresolved';
+      const beforeValue = pendingRowCreation ? '(new row)' : storedBeforeValue;
       const changeKey = `pre_op.${toothNumber}.${fieldName}`;
       const policy = resolveFieldPolicy(changeKey, fieldName, decision);
 
       let afterValue;
       if (fieldName === 'Symptom' && policy === 'add') {
-        afterValue = mergeMultiSelectAdd(beforeValue, incomingValue);
+        afterValue = mergeMultiSelectAdd(
+          pendingRowCreation ? undefined : storedBeforeValue,
+          incomingValue
+        );
       } else if (Array.isArray(incomingValue)) {
         afterValue = deepClone(incomingValue);
       } else {
         afterValue = incomingValue;
       }
 
-      const noOp = currentStateReliable
-        ? valuesEqual(beforeValue, afterValue, 'pre_op', fieldName)
+      const noOp = pendingRowCreation
+        ? false
+        : currentStateReliable
+          ? valuesEqual(storedBeforeValue, afterValue, 'pre_op', fieldName)
         : false;
 
       findingsChanges.push({
@@ -1537,10 +1544,11 @@ function buildPhase1FullPreview(transformedPayload, currentState, headerTouched,
         no_op: noOp,
         write_target_type: 'finding_row',
         row_resolution: rowResolution,
+        pending_row_creation: pendingRowCreation,
         merge_mode: noOp ? 'no_op' : policy,
         current_live_before: beforeValue,
         expected_after: afterValue,
-        label: computePreviewDisplayLabel(beforeValue, noOp)
+        label: pendingRowCreation ? '신규 행 생성 예정' : computePreviewDisplayLabel(beforeValue, noOp)
       });
     }
   }
@@ -1802,6 +1810,8 @@ if ((stage1Preview.items || []).length > 0 && rawStage1Decision === undefined) {
   const stage1Guide = buildPhase1Stage1ChoiceGuide(stage1Preview);
   const stage1UserQuestion = buildPhase1Stage1UserQuestion(stage1Preview);
   const stage1RequiredInput = buildPhase1Stage1RequiredInput();
+  const isSingleStage1Item = (stage1Preview.items || []).length === 1;
+  const singleStage1Item = isSingleStage1Item ? stage1Preview.items[0] : null;
   const previewBodyMarkdown = (stage1Preview.items || [])
     .map((item) => {
       const formatValue = (value) => {
@@ -1826,6 +1836,37 @@ if ((stage1Preview.items || []).length > 0 && rawStage1Decision === undefined) {
       ].join('\n');
     })
     .join('\n\n');
+  const compactAssistantQuestion = isSingleStage1Item
+    ? '1. add\n2. replace'
+    : stage1UserQuestion;
+  const compactRequiredInput = isSingleStage1Item
+    ? {
+        type: 'single_number_choice',
+        field: 'phase1_multiple_policy_choice',
+        choices: [
+          {
+            number: 1,
+            label: 'add',
+            value: 'add',
+            arg_patch: {
+              phase1_decision: {
+                phase1_multiple_policy_choice: `${singleStage1Item.number} add`
+              }
+            }
+          },
+          {
+            number: 2,
+            label: 'replace',
+            value: 'replace',
+            arg_patch: {
+              phase1_decision: {
+                phase1_multiple_policy_choice: `${singleStage1Item.number} replace`
+              }
+            }
+          }
+        ]
+      }
+    : stage1RequiredInput;
 
   return {
     ok: true,
@@ -1847,9 +1888,9 @@ if ((stage1Preview.items || []).length > 0 && rawStage1Decision === undefined) {
       mode: 'ask_user',
       ui_kind: 'preview_confirmation',
       user_message: '기존 방문 업데이트 multiple preview입니다. 아래 내용을 확인한 뒤 입력해 주세요.',
-      assistant_question: stage1UserQuestion,
+      assistant_question: compactAssistantQuestion,
       preview_body_markdown: previewBodyMarkdown,
-      required_user_input: stage1RequiredInput,
+      required_user_input: compactRequiredInput,
       next_step: stage1Guide,
       do_not_ask: []
     },
@@ -1859,15 +1900,16 @@ if ((stage1Preview.items || []).length > 0 && rawStage1Decision === undefined) {
       must_show_message: true,
       user_visible_message: '기존 방문 업데이트 multiple preview입니다. 아래 내용을 확인한 뒤 입력해 주세요.',
       must_ask_user: true,
-      user_question: stage1UserQuestion,
-      accepted_input_type: 'text',
-      accepted_format: 'stage1_policy_choice',
-      allowed_input_description:
-        '0 또는 항목 번호, 필요 시 "번호 add" 또는 "번호 replace"',
-      allowed_input_examples: ['0', '1', '1 add', '1 replace'],
+      user_question: compactAssistantQuestion,
+      accepted_input_type: isSingleStage1Item ? 'single_number_choice' : 'text',
+      accepted_format: isSingleStage1Item ? '1_add_or_2_replace' : 'stage1_policy_choice',
+      allowed_input_description: isSingleStage1Item
+        ? '1은 add, 2는 replace'
+        : '0 또는 항목 번호, 필요 시 "번호 add" 또는 "번호 replace"',
+      allowed_input_examples: isSingleStage1Item ? ['1', '2'] : ['0', '1', '1 add', '1 replace'],
       allowed_actions: [
         'show_preview',
-        'ask_text_input',
+        isSingleStage1Item ? 'ask_single_number_choice' : 'ask_text_input',
         'build_full_preview_after_user_choice'
       ],
       forbidden_actions: [
