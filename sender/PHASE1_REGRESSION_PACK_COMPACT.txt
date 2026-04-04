@@ -1,0 +1,178 @@
+# Phase 1 Regression Pack - Compact Case Reference
+**Version**: 1.1.17-phase1-closeout  
+**Format**: Copy-paste ready for test execution planning
+
+---
+
+## Compact Case Definitions
+
+```
+RP-01 | new_patient + patient_found
+  Type: CONTRACT-SENSITIVE
+  Trigger: new_patient + new_visit + current-state matches
+  Output: NEW_PATIENT_PATIENT_FOUND_STAGE1_PREVIEW
+  Assert: conflict envelope, 3 choices (1,2,3), choice field path correct
+  Fail: missing envelope, wrong stage, choice count ≠ 3
+
+RP-02 | choice_2 + not_found → resolved
+  Type: STATE-SENSITIVE
+  Input: choice_2 + replacement_patient_id (not found)
+  Output: NEW_PATIENT_PATIENT_FOUND_RELOOKUP_NOT_FOUND_RESOLVED
+  Assert: no conflict, back to new_visit preview, conflict_flow=true
+  Fail: conflict persists, wrong stage
+
+RP-03 | choice_2 + found → conflict re-preview
+  Type: STATE-SENSITIVE
+  Input: choice_2 + replacement_patient_id (found)
+  Output: NEW_PATIENT_PATIENT_FOUND_RELOOKUP_FOUND_STAGE1_PREVIEW
+  Assert: conflict re-rendered, same 3-choice structure, no loop
+  Fail: loop detected, conflict removed, wrong stage
+
+RP-04 | choice_2 + unavailable → retry_later
+  Type: STATE-SENSITIVE
+  Input: choice_2 + current-state fails/timeout
+  Output: result_type='retry_later', stage=...UNAVAILABLE
+  Assert: blocks proceed, message instructs retry
+  Fail: proceeds without state, result_type wrong
+
+RP-05 | same_date + choice_1 → corrected existing_visit_update
+  Type: CONTRACT-SENSITIVE
+  Input: same-date correction + choice_1
+  Output: workflow.mode='existing_visit_update', confirm_existing_visit_update set
+  Assert: message mentions preview required, next call must show stage2
+  Fail: blind send allowed, mode not set, message missing
+
+RP-06 | same_date + choice_2 → hard-stop
+  Type: CONTRACT-SENSITIVE
+  Input: same-date correction + choice_2
+  Output: transaction halted
+  Assert: no further state progression, user must restart
+  Fail: proceeds unexpectedly
+
+RP-07 | existing_visit_update + all_no_op → send blocked
+  Type: CONTRACT-SENSITIVE
+  Input: existing_visit_update, all changes no_op (before==incoming)
+  Output: result_type='no_op', all rows "변경 없음"
+  Assert: must_not_call_sender_send=true, send blocked
+  Fail: result_type≠no_op, shows "변경 예정", send allowed
+
+RP-08 | existing_visit_update + real_changes → preview first
+  Type: CONTRACT-SENSITIVE
+  Input: existing_visit_update + (header diff OR findings diff)
+  Output: stage_2 preview with labels: "변경 없음" / "변경 예정" / "(current-state unavailable)"
+  Assert: confirmation required, blind send blocked
+  Fail: skips preview, wrong labels, blind send allowed
+
+RP-09 | existing_visit_update + two_stage_complete
+  Type: CONTRACT-SENSITIVE
+  Input: confirm_existing_visit_update + stage2 preview confirmed
+  Output: two_stage_preview_used=true, ready for sender_send
+  Assert: execution summary complete, trace recorded
+  Fail: trace missing, send state wrong
+
+RP-10 | patient_recheck_required flag
+  Type: CONTRACT-SENSITIVE
+  Input: any route + patient data changed
+  Output: is_patient_recheck_required=true, must_not_call_sender_send=true
+  Assert: message guides user, flag consistent
+  Fail: flag missing, inconsistent value
+
+RP-11 | patient_recheck_failed
+  Type: STATE-SENSITIVE
+  Input: patient recheck + current-state mismatch
+  Output: reason message, no auto-recovery
+  Assert: user must re-input, conflict re-engaged
+  Fail: auto-proceeds, vague message, state resets
+
+RP-12 | existing_patient + new_visit normal path
+  Type: CONTRACT-SENSITIVE
+  Input: existing_patient + new_visit, no conflicts
+  Output: direct stage2 preview, conflict_flow=false
+  Assert: no conflict envelope, standard confirmation
+  Fail: conflict appears, wrong stage
+
+RP-13 | same_date_choice_1 → existing_visit_update re-entry
+  Type: CONTRACT-SENSITIVE
+  Input: same-date correction choice_1 path
+  Output: workflow.mode='existing_visit_update', stage2 preview rendered
+  Assert: labels locked, no choice prompts until send confirmed
+  Fail: wrong mode, missing labels, prompts reappear
+```
+
+---
+
+## Classification Quick Reference
+
+**STATE-SENSITIVE** (mock current-state responses):
+- RP-02, RP-03, RP-04 (choice_2 lookups)
+- RP-11 (recheck mismatch)
+
+**CONTRACT-SENSITIVE** (verify independent of live state):
+- RP-01, RP-05, RP-06 (conflict/correction envelope)
+- RP-07, RP-08, RP-09 (existing_visit_update preview/send)
+- RP-10, RP-12, RP-13 (routing, recheck, mode lock)
+
+---
+
+## Test Execution Order
+
+1. RP-01 (foundation)
+2. RP-02, RP-03, RP-04 (choice_2 paths)
+3. RP-07 (early safety gate)
+4. RP-05 (mode transition)
+5. RP-08 (core preview)
+6. RP-06, RP-13 (hard-stop, final entry)
+7. RP-09 (two-stage complete)
+8. RP-10, RP-11, RP-12 (recheck, boundaries)
+
+---
+
+## Pass Criteria Checklist
+
+- [ ] All conflict envelopes render with correct 3-choice structure
+- [ ] Choice 2 resolution paths behave correctly (found/not-found/unavailable)
+- [ ] Same-date choice 1 transitions to existing_visit_update mode
+- [ ] Same-date choice 2 halts transaction
+- [ ] No-op sends are blocked (result_type='no_op')
+- [ ] Real changes enforce stage 2 preview before send
+- [ ] Korean labels exact: "변경 없음", "변경 예정", "(current-state unavailable)"
+- [ ] Patient recheck flag set when patient data changed
+- [ ] No blind sends after correction or re-entry
+- [ ] Two-stage preview trace recorded
+- [ ] No route interference
+
+---
+
+## Reference Constants
+
+```javascript
+const SENDER_RUNTIME_VERSION = '1.1.17-phase1-closeout';
+
+// Key stage names (must match exactly in responses):
+'NEW_PATIENT_PATIENT_FOUND_STAGE1_PREVIEW'
+'NEW_PATIENT_PATIENT_FOUND_RELOOKUP_NOT_FOUND_RESOLVED'
+'NEW_PATIENT_PATIENT_FOUND_RELOOKUP_FOUND_STAGE1_PREVIEW'
+'NEW_PATIENT_PATIENT_FOUND_CURRENT_STATE_REQUIRED_UNAVAILABLE'
+
+// Key result types:
+'retry_later' (unavailable)
+'no_op' (all changes no-op)
+
+// Key field paths:
+'phase1_decision.new_patient_patient_found_decision' (1,2,3)
+'phase1_decision.confirm_existing_visit_update'
+
+// Key flags:
+is_patient_recheck_required: boolean
+must_not_call_sender_send_after_reinput: boolean
+```
+
+---
+
+## Notes for Test Teams
+
+- All Korean text is **exact match required**
+- `current-state unavailable` is a valid system state (never bypass silently)
+- Stage 1 → Stage 2 preview is **sequence-locked** (cannot skip)
+- `must_not_call_sender_send_after_reinput=false` only then `sender_send` is safe
+- No logic redesign permitted without regression pack revision

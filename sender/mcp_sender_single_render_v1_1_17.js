@@ -15,6 +15,35 @@ const CURRENT_STATE_FETCH_TIMEOUT_MS = Math.max(3000, Number(process.env.CURRENT
 const CURRENT_STATE_FETCH_BACKOFF_MS = Math.max(0, Number(process.env.CURRENT_STATE_FETCH_BACKOFF_MS || 800));
 const SENDER_RUNTIME_VERSION = '1.1.17-phase1-closeout';
 
+/*
+═══════════════════════════════════════════════════════════════════════════════
+  PHASE 1 REGRESSION PACK LOCK
+  
+  This runtime embeds locked phase1 behavior for regression testing.
+  DO NOT modify routing logic, phase1 decision flow, or preview/send blocking
+  without updating the regression pack specification.
+  
+  Reference: ./PHASE1_REGRESSION_PACK_SPEC.md
+  
+  Locked Cases:
+    RP-01: new_patient + Spatient_found → conflict preview with 3 choices
+    RP-02: choice_2 + not_found → resolved to normal new_visit preview
+    RP-03: choice_2 + found → updated conflict preview (no loop)
+    RP-04: choice_2 + current_state_unavailable → safe stop (retry_later)
+    RP-05: same_date_correction + choice_1 → existing_visit_update preview re-entry
+    RP-06: same_date_correction + choice_2 → hard-stop transaction
+    RP-07: existing_visit_update + all_no_op → result_type=no_op, send blocked
+    RP-08: existing_visit_update + real_changes → stage_2 preview required
+    RP-09: existing_visit_update + two_stage_complete → ready for final send
+    RP-10: all_routes + patient_change → is_patient_recheck_required=true
+    RP-11: patient_recheck_failed → no auto-recovery, re-input required
+    RP-12: existing_patient + new_visit → direct stage_2, no conflict
+    RP-13: same_date_choice_1 → existing_visit_update mode, no further choices
+  
+  Version Lock: SENDER_RUNTIME_VERSION = '1.1.17-phase1-closeout'
+═══════════════════════════════════════════════════════════════════════════════
+*/
+
 const sessions = new Map();
 
 function corsHeaders() {
