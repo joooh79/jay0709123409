@@ -13,6 +13,7 @@ const CURRENT_STATE_MCP_BASE_URL = process.env.CURRENT_STATE_MCP_BASE_URL || '';
 const CURRENT_STATE_FETCH_ROUNDS = Math.max(1, Number(process.env.CURRENT_STATE_FETCH_ROUNDS || 3));
 const CURRENT_STATE_FETCH_TIMEOUT_MS = Math.max(3000, Number(process.env.CURRENT_STATE_FETCH_TIMEOUT_MS || 12000));
 const CURRENT_STATE_FETCH_BACKOFF_MS = Math.max(0, Number(process.env.CURRENT_STATE_FETCH_BACKOFF_MS || 800));
+const CHIEF_COMPLAINT_ADD_SEPARATOR = process.env.CHIEF_COMPLAINT_ADD_SEPARATOR || '';
 const SENDER_RUNTIME_VERSION = '1.1.17-phase1-closeout';
 
 /*
@@ -358,6 +359,22 @@ function mergeMultiSelectAdd(storedArr, incomingArr) {
   }
 
   return merged;
+}
+
+function normalizeChiefComplaintText(value) {
+  return safeString(value).trim();
+}
+
+function mergeChiefComplaintAdd(before, incoming) {
+  const normalizedBefore = normalizeChiefComplaintText(before);
+  const normalizedIncoming = normalizeChiefComplaintText(incoming);
+  const separator = CHIEF_COMPLAINT_ADD_SEPARATOR;
+
+  if (!normalizedBefore) return normalizedIncoming;
+  if (!normalizedIncoming) return normalizedBefore;
+  if (!separator) return normalizedIncoming;
+
+  return `${normalizedBefore}${separator}${normalizedIncoming}`;
 }
 
 
@@ -951,6 +968,34 @@ function buildPhase1MultiplePreview(transformedPayload, currentState) {
 
   const items = [];
 
+  const visitFields = getRecordFields(currentState?.visitBody || {});
+  const incomingChiefComplaint = transformedPayload?.visits?.chief_complaint || '';
+  const beforeChiefComplaint = safeString(visitFields['Chief Complaint'] || '');
+
+  if (beforeChiefComplaint && incomingChiefComplaint) {
+    const afterIfAdd = mergeChiefComplaintAdd(beforeChiefComplaint, incomingChiefComplaint);
+    const afterIfReplace = incomingChiefComplaint;
+
+    const policyChoiceChangesOutcome = !valuesEqual(afterIfAdd, afterIfReplace, 'visits', 'chief_complaint');
+
+    if (policyChoiceChangesOutcome) {
+      items.push({
+        number: items.length + 1,
+        key: 'visits.chief_complaint',
+        choice_mode: 'add_or_replace',
+        section: 'visits',
+        field: 'chief_complaint',
+        before: beforeChiefComplaint,
+        incoming: incomingChiefComplaint,
+        default_policy: 'replace',
+        after_if_add: afterIfAdd,
+        after_if_replace: afterIfReplace,
+        write_target_type: 'visit_header',
+        merge_mode: 'replace'
+      });
+    }
+  }
+
   for (const record of findings) {
     if (safeString(record?.branch_key) !== 'pre_op') continue;
 
@@ -981,6 +1026,7 @@ function buildPhase1MultiplePreview(transformedPayload, currentState) {
     items.push({
       number: items.length + 1,
       key: `pre_op.${toothNumber}.Symptom`,
+      choice_mode: 'add_or_replace',
       branch: 'pre_op',
       tooth_number: toothNumber,
       record_name: recordName,
@@ -1003,7 +1049,7 @@ function buildPhase1MultiplePreview(transformedPayload, currentState) {
     stage: 'multiple_policy_preview',
     items,
     prompt:
-      'add가 아니라 replace로 바꾸고 싶은 항목 번호를 입력하세요. 없으면 0을 입력하세요.'
+      '항목의 default policy를 변경하려면 항목 번호와 정책을 입력하세요. (예: \"1 add\", \"2 replace\") 또는 0 입력하면 모두 기본값 유지'
   };
 }
 
@@ -1017,26 +1063,63 @@ function normalizeChoiceToken(raw) {
   return '';
 }
 
-function parseStage1ChoiceToReplaceOverrides(rawChoice, stage1Preview) {
-  const token = normalizeChoiceToken(rawChoice);
+function parseStage1ChoiceDecision(rawChoice, stage1Preview) {
   const items = Array.isArray(stage1Preview?.items) ? stage1Preview.items : [];
+  const result = {
+    replaceOverrides: [],
+    addOverrides: []
+  };
 
-  if (token === '' || token === '0' || token === 'keep_add' || token === 'add') {
-    return [];
+  if (!rawChoice || rawChoice === '' || rawChoice === 0 || rawChoice === '0') {
+    return result;
   }
 
-  if (token === 'replace' && items.length > 0) {
-    return [items[0].key];
+  const token = normalizeChoiceToken(rawChoice);
+  const parts = safeString(token).split(/\s+/);
+  const numberPart = parts[0];
+  const policyPart = parts[1] || '';
+
+  if (!/^\d+$/.test(numberPart)) {
+    return result;
   }
 
-  if (/^\d+$/.test(token)) {
-    const number = Number(token);
-    if (number === 0) return [];
-    const matched = items.find((item) => item.number === number);
-    if (matched?.key) return [matched.key];
+  const number = Number(numberPart);
+  if (number === 0) return result;
+
+  const matched = items.find((item) => item.number === number);
+  if (!matched?.key) return result;
+
+  const choiceMode = safeString(matched.choice_mode || 'add_or_replace');
+  const itemDefaultPolicy = matched.default_policy || 'replace';
+  const requestedPolicy = safeString(policyPart).toLowerCase();
+
+  if (!requestedPolicy) {
+    let overrideTo = '';
+
+    if (choiceMode === 'add_or_replace') {
+      overrideTo = itemDefaultPolicy === 'add' ? 'replace' : 'add';
+    } else {
+      overrideTo = itemDefaultPolicy === 'add' ? 'replace' : 'add';
+    }
+
+    if (overrideTo === 'replace') {
+      result.replaceOverrides.push(matched.key);
+    } else {
+      result.addOverrides.push(matched.key);
+    }
+  } else if (choiceMode === 'add_or_replace') {
+    if (requestedPolicy === 'add') {
+      if (itemDefaultPolicy !== 'add') {
+        result.addOverrides.push(matched.key);
+      }
+    } else if (requestedPolicy === 'replace') {
+      if (itemDefaultPolicy !== 'replace') {
+        result.replaceOverrides.push(matched.key);
+      }
+    }
   }
 
-  return [];
+  return result;
 }
 
 function extractPhase1Stage1Input(input) {
@@ -1049,7 +1132,7 @@ function extractPhase1Stage1Input(input) {
   }
 
   if (input && typeof input === 'object') {
-    if (Array.isArray(input.replaceOverrides)) return input;
+    if (Array.isArray(input.replaceOverrides) || Array.isArray(input.addOverrides)) return input;
 
     const candidates = [
       input.phase1_multiple_policy_choice,
@@ -1072,20 +1155,23 @@ function extractPhase1Stage1Input(input) {
 function parsePhase1Decision(input, stage1Preview) {
   if (input === undefined || input === null || input === '') {
     return {
-      replaceOverrides: []
+      replaceOverrides: [],
+      addOverrides: []
     };
   }
 
   if (typeof input === 'string' || typeof input === 'number' || typeof input === 'boolean') {
-    return {
-      replaceOverrides: parseStage1ChoiceToReplaceOverrides(input, stage1Preview)
-    };
+    return parseStage1ChoiceDecision(input, stage1Preview);
   }
 
   if (input && typeof input === 'object') {
-    if (Array.isArray(input.replaceOverrides)) {
+    if (Array.isArray(input.replaceOverrides) || Array.isArray(input.addOverrides)) {
       return {
-        replaceOverrides: input.replaceOverrides
+        replaceOverrides: (Array.isArray(input.replaceOverrides) ? input.replaceOverrides : [])
+          .map((item) => (typeof item === 'string' ? item : ''))
+          .map((item) => item.trim())
+          .filter(Boolean),
+        addOverrides: (Array.isArray(input.addOverrides) ? input.addOverrides : [])
           .map((item) => (typeof item === 'string' ? item : ''))
           .map((item) => item.trim())
           .filter(Boolean)
@@ -1093,23 +1179,29 @@ function parsePhase1Decision(input, stage1Preview) {
     }
 
     const extracted = extractPhase1Stage1Input(input);
-    return {
-      replaceOverrides: parseStage1ChoiceToReplaceOverrides(extracted, stage1Preview)
-    };
+    return parseStage1ChoiceDecision(extracted, stage1Preview);
   }
 
   return {
-    replaceOverrides: []
+    replaceOverrides: [],
+    addOverrides: []
   };
 }
 
 function resolveFieldPolicy(changeKey, fieldName, decision) {
-  const overrides = Array.isArray(decision?.replaceOverrides)
+  const replaceOverrides = Array.isArray(decision?.replaceOverrides)
     ? decision.replaceOverrides
+    : [];
+  const addOverrides = Array.isArray(decision?.addOverrides)
+    ? decision.addOverrides
     : [];
 
   if (fieldName === 'Symptom') {
-    return overrides.includes(changeKey) ? 'replace' : 'add';
+    return replaceOverrides.includes(changeKey) ? 'replace' : 'add';
+  }
+
+  if (fieldName === 'chief_complaint') {
+    return addOverrides.includes(changeKey) ? 'add' : 'replace';
   }
 
   return 'replace';
@@ -1298,15 +1390,29 @@ function buildPhase1FullPreview(transformedPayload, currentState, headerTouched,
   if (headerTouched.visits.chief_complaint) {
     const before = currentStateReliable ? (visitFields['Chief Complaint'] || '') : '(current-state unavailable)';
     const incoming = transformedPayload?.visits?.chief_complaint || '';
+    const changeKey = 'visits.chief_complaint';
+    const policy = resolveFieldPolicy(changeKey, 'chief_complaint', decision);
+
+    let afterValue;
+    if (policy === 'add') {
+      afterValue = mergeChiefComplaintAdd(before, incoming);
+    } else {
+      afterValue = incoming;
+    }
+
+    const noOp = currentStateReliable
+      ? valuesEqual(before, afterValue, 'visits', 'chief_complaint')
+      : false;
+
     headerChanges.push({
       section: 'visits',
       field: 'chief_complaint',
       before,
       incoming,
-      policy: 'replace',
-      after: incoming,
-      no_op: valuesEqual(before, incoming, 'visits', 'chief_complaint'),
-      label: computePreviewDisplayLabel(before, valuesEqual(before, incoming, 'visits', 'chief_complaint'))
+      policy,
+      after: afterValue,
+      no_op: noOp,
+      label: computePreviewDisplayLabel(before, noOp)
     });
   }
 
@@ -1499,6 +1605,8 @@ function buildSenderExecutionMetadata(headerTouched, stage2Preview, decision) {
       two_stage_preview_used: true,
       multiple_override_stage_used: true,
       multiple_override_changed_fields: deepClone(decision?.replaceOverrides || []),
+      replaceOverrides: deepClone(decision?.replaceOverrides || []),
+      addOverrides: deepClone(decision?.addOverrides || []),
       final_confirmation: 'confirmed'
     }
   };
@@ -1583,6 +1691,13 @@ function buildPhase1ExecutionPayload(transformedPayload, stage2Preview, headerTo
     };
   });
 
+  for (const change of stage2Preview.header_changes || []) {
+    if (change.section === 'visits' && change.field === 'chief_complaint' && !change.no_op) {
+      finalPayload.visits = finalPayload.visits || {};
+      finalPayload.visits.chief_complaint = change.after;
+    }
+  }
+
   finalPayload.sender_execution = buildSenderExecutionMetadata(
     headerTouched,
     stage2Preview,
@@ -1609,7 +1724,6 @@ async function buildPhase1TransformEnvelope(payload, transformResult, phase1Deci
   const transformedPayload = transformResult.transformed_payload;
   const headerTouched = detectHeaderTouchedFields(transformedPayload);
   const findingsTouched = detectFindingsTouchedFields(transformedPayload);
-  const symptomTouched = hasSymptomTouch(transformedPayload);
   const currentState = await buildExistingVisitUpdateCurrentState(transformedPayload);
 
   if (!currentState.ready && currentState.fatal) {
@@ -1643,7 +1757,7 @@ const stage1Preview = currentState.ready
 
 const rawStage1Decision = extractPhase1Stage1Input(phase1DecisionRaw);
 
-if (symptomTouched && (stage1Preview.items || []).length > 0 && rawStage1Decision === undefined) {
+if ((stage1Preview.items || []).length > 0 && rawStage1Decision === undefined) {
   return {
     ok: true,
     tool: 'sender_transform',

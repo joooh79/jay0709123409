@@ -7,7 +7,7 @@ ChatGPT -> warm-up proxy Worker -> single Render sender -> Make
 
 Primary implementation artifacts:
 - proxy-worker.js
-- mcp_sender_single_render_v1.js
+- mcp_sender_single_render_v1_1_17js
 - package.json
 
 Rules:
