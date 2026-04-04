@@ -2260,6 +2260,19 @@ function buildInteraction(senderJson) {
           }
         ]
       },
+      next_step_on_choice: {
+        '1': {
+          next_step_type: 'sender_transform',
+          must_open_preview_immediately: true,
+          send_ready: false,
+          reason: 'choice 1 requires corrected existing_visit_update preview before final send'
+        },
+        '2': {
+          next_step_type: 'sender_send',
+          send_ready: true,
+          reason: 'choice 2 proceeds with new_visit claim as-is'
+        }
+      },
       do_not_ask: [
         'patients.patient_id',
         'visits.date',
@@ -2412,6 +2425,8 @@ function buildResendPlan(senderJson) {
       preserve_clinical_payload: true,
       replace_fields: [],
       set_fields_on_confirm_existing_visit_update: {
+        'workflow.mode': 'existing_visit_update',
+        'workflow.patient_status_claim': 'existing_patient',
         'workflow.visit_intent_claim': 'existing_visit_update',
         'workflow.doctor_confirmed_correction': true,
         'workflow.correction_applied': 'true',
@@ -2420,6 +2435,35 @@ function buildResendPlan(senderJson) {
       },
       set_fields_on_keep_new_visit_claim: {
         'workflow.doctor_confirmed_correction': false
+      },
+      next_step_type_on_choice: {
+        '1': 'sender_transform',
+        '2': 'sender_send'
+      },
+      choice_1_instruction: {
+        next_step_type: 'sender_transform',
+        must_open_preview_immediately: true,
+        reason: 'corrected existing_visit_update preview required before final send',
+        expected_phase1: 'may_apply_if_has_header_or_symptom_touch'
+      },
+      choice_2_instruction: {
+        next_step_type: 'sender_send',
+        send_ready: true
+      },
+      next_call_example_choice_1: {
+        use_same_payload: true,
+        tool: 'sender_transform',
+        patch: {
+          workflow: {
+            mode: 'existing_visit_update',
+            patient_status_claim: 'existing_patient',
+            visit_intent_claim: 'existing_visit_update',
+            doctor_confirmed_correction: true,
+            correction_applied: 'true',
+            correction_case: 'same_date_existing_visit_possible_update',
+            correction_source: 'sender_resend_after_correction_required'
+          }
+        }
       },
       regenerate_fields: []
     };
@@ -2530,16 +2574,41 @@ function buildExecutionContract(senderJson) {
         '1': 'confirm_existing_visit_update',
         '2': 'keep_new_visit_claim'
       },
+      next_step_routing: {
+        '1': {
+          next_step_type: 'sender_transform',
+          must_open_preview_immediately: true,
+          send_ready: false,
+          mandate: 'MUST NOT CALL sender_send DIRECTLY after choice 1',
+          reason: 'semantically corrected existing_visit_update payload requires preview confirmation first',
+          corrected_payload_requirements: [
+            'workflow.mode = existing_visit_update',
+            'workflow.patient_status_claim = existing_patient',
+            'workflow.visit_intent_claim = existing_visit_update',
+            'workflow.doctor_confirmed_correction = true',
+            'corrected payload must pass isExistingVisitUpdatePayload validation',
+            'if Phase1 applicable, show Phase1 preview',
+            'final detailed preview must appear before send'
+          ]
+        },
+        '2': {
+          next_step_type: 'sender_send',
+          send_ready: true,
+          mandate: 'proceed with new_visit claim unchanged'
+        }
+      },
       allowed_actions: [
         'ask_single_number_choice',
         'patch_previous_payload',
-        'resend_after_user_answer'
+        'transform_after_user_answer_choice_1',
+        'send_after_user_answer_choice_2'
       ],
       forbidden_actions: [
         'ask_patient_id_again',
         'ask_full_json_again',
         'ask_full_briefing_again',
-        'ask_findings_again'
+        'ask_findings_again',
+        'send_directly_after_choice_1_without_transform'
       ],
       auto_resend_allowed: false,
       stop_after_response: false
