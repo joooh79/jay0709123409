@@ -982,7 +982,7 @@ function buildPhase1MultiplePreview(transformedPayload, currentState) {
       items.push({
         number: items.length + 1,
         key: 'visits.chief_complaint',
-        choice_mode: 'add_or_replace',
+        choice_mode: 'keep_add_replace',
         section: 'visits',
         field: 'chief_complaint',
         before: beforeChiefComplaint,
@@ -1049,7 +1049,9 @@ function buildPhase1MultiplePreview(transformedPayload, currentState) {
     stage: 'multiple_policy_preview',
     items,
     prompt:
-      '항목의 default policy를 변경하려면 항목 번호와 정책을 입력하세요. (예: \"1 add\", \"2 replace\") 또는 0 입력하면 모두 기본값 유지'
+      items.some((item) => item.key === 'visits.chief_complaint')
+        ? '항목의 default policy를 변경하려면 항목 번호와 정책을 입력하세요. chief_complaint는 "번호 keep/add/replace", 다른 항목은 "번호 add/replace"를 지원합니다. 또는 0 입력하면 모두 기본값 유지'
+        : '항목의 default policy를 변경하려면 항목 번호와 정책을 입력하세요. (예: \"1 add\", \"2 replace\") 또는 0 입력하면 모두 기본값 유지'
   };
 }
 
@@ -1067,7 +1069,8 @@ function parseStage1ChoiceDecision(rawChoice, stage1Preview) {
   const items = Array.isArray(stage1Preview?.items) ? stage1Preview.items : [];
   const result = {
     replaceOverrides: [],
-    addOverrides: []
+    addOverrides: [],
+    keepCurrentOverrides: []
   };
 
   if (!rawChoice || rawChoice === '' || rawChoice === 0 || rawChoice === '0') {
@@ -1092,23 +1095,31 @@ function parseStage1ChoiceDecision(rawChoice, stage1Preview) {
   const choiceMode = safeString(matched.choice_mode || 'add_or_replace');
   const itemDefaultPolicy = matched.default_policy || 'replace';
   const requestedPolicy = safeString(policyPart).toLowerCase();
+  const isChiefComplaintItem =
+    matched.key === 'visits.chief_complaint' || matched.field === 'chief_complaint';
 
   if (!requestedPolicy) {
     let overrideTo = '';
 
-    if (choiceMode === 'add_or_replace') {
+    if (choiceMode === 'keep_add_replace') {
+      overrideTo = 'add';
+    } else if (choiceMode === 'add_or_replace') {
       overrideTo = itemDefaultPolicy === 'add' ? 'replace' : 'add';
     } else {
       overrideTo = itemDefaultPolicy === 'add' ? 'replace' : 'add';
     }
 
-    if (overrideTo === 'replace') {
+    if (overrideTo === 'keep_current') {
+      result.keepCurrentOverrides.push(matched.key);
+    } else if (overrideTo === 'replace') {
       result.replaceOverrides.push(matched.key);
     } else {
       result.addOverrides.push(matched.key);
     }
-  } else if (choiceMode === 'add_or_replace') {
-    if (requestedPolicy === 'add') {
+  } else if (choiceMode === 'add_or_replace' || choiceMode === 'keep_add_replace') {
+    if ((requestedPolicy === 'keep' || requestedPolicy === 'keep_current') && isChiefComplaintItem) {
+      result.keepCurrentOverrides.push(matched.key);
+    } else if (requestedPolicy === 'add') {
       if (itemDefaultPolicy !== 'add') {
         result.addOverrides.push(matched.key);
       }
@@ -1156,7 +1167,8 @@ function parsePhase1Decision(input, stage1Preview) {
   if (input === undefined || input === null || input === '') {
     return {
       replaceOverrides: [],
-      addOverrides: []
+      addOverrides: [],
+      keepCurrentOverrides: []
     };
   }
 
@@ -1165,13 +1177,17 @@ function parsePhase1Decision(input, stage1Preview) {
   }
 
   if (input && typeof input === 'object') {
-    if (Array.isArray(input.replaceOverrides) || Array.isArray(input.addOverrides)) {
+    if (Array.isArray(input.replaceOverrides) || Array.isArray(input.addOverrides) || Array.isArray(input.keepCurrentOverrides)) {
       return {
         replaceOverrides: (Array.isArray(input.replaceOverrides) ? input.replaceOverrides : [])
           .map((item) => (typeof item === 'string' ? item : ''))
           .map((item) => item.trim())
           .filter(Boolean),
         addOverrides: (Array.isArray(input.addOverrides) ? input.addOverrides : [])
+          .map((item) => (typeof item === 'string' ? item : ''))
+          .map((item) => item.trim())
+          .filter(Boolean),
+        keepCurrentOverrides: (Array.isArray(input.keepCurrentOverrides) ? input.keepCurrentOverrides : [])
           .map((item) => (typeof item === 'string' ? item : ''))
           .map((item) => item.trim())
           .filter(Boolean)
@@ -1184,7 +1200,8 @@ function parsePhase1Decision(input, stage1Preview) {
 
   return {
     replaceOverrides: [],
-    addOverrides: []
+    addOverrides: [],
+    keepCurrentOverrides: []
   };
 }
 
@@ -1195,12 +1212,18 @@ function resolveFieldPolicy(changeKey, fieldName, decision) {
   const addOverrides = Array.isArray(decision?.addOverrides)
     ? decision.addOverrides
     : [];
+  const keepCurrentOverrides = Array.isArray(decision?.keepCurrentOverrides)
+    ? decision.keepCurrentOverrides
+    : [];
 
   if (fieldName === 'Symptom') {
     return replaceOverrides.includes(changeKey) ? 'replace' : 'add';
   }
 
   if (fieldName === 'chief_complaint') {
+    if (keepCurrentOverrides.includes(changeKey)) {
+      return 'keep_current';
+    }
     return addOverrides.includes(changeKey) ? 'add' : 'replace';
   }
 
@@ -1237,23 +1260,38 @@ function valuesEqual(a, b, section = '', field = '') {
 
 function buildPhase1Stage1UserQuestion(stage1Preview) {
   const prompt = safeString(stage1Preview?.prompt).trim();
+  const items = Array.isArray(stage1Preview?.items) ? stage1Preview.items : [];
+  const hasChiefComplaintItem = items.some((item) => item?.key === 'visits.chief_complaint' || item?.field === 'chief_complaint');
   const toggleHint = '항목 번호만 입력하면 해당 항목이 non-default policy로 전환됩니다. (예: "1")';
+  const chiefComplaintHint = hasChiefComplaintItem
+    ? 'chief_complaint 항목은 "번호 keep", "번호 add", "번호 replace"를 지원합니다.'
+    : '';
 
   if (!prompt) {
-    return `${toggleHint}\n정책을 명시하려면 "번호 add" 또는 "번호 replace" 형식으로 입력하세요. 0 입력하면 모두 기본값 유지`;
+    return [
+      toggleHint,
+      hasChiefComplaintItem
+        ? '정책을 명시하려면 "번호 keep/add/replace" 형식으로 입력하세요. 0 입력하면 모두 기본값 유지'
+        : '정책을 명시하려면 "번호 add" 또는 "번호 replace" 형식으로 입력하세요. 0 입력하면 모두 기본값 유지',
+      chiefComplaintHint
+    ].filter(Boolean).join('\n');
   }
 
-  return `${prompt}\n${toggleHint}`;
+  return [prompt, toggleHint, chiefComplaintHint].filter(Boolean).join('\n');
 }
 
-function buildPhase1Stage1RequiredInput() {
+function buildPhase1Stage1RequiredInput(stage1Preview) {
+  const items = Array.isArray(stage1Preview?.items) ? stage1Preview.items : [];
+  const hasChiefComplaintItem = items.some((item) => item?.key === 'visits.chief_complaint' || item?.field === 'chief_complaint');
   return {
     type: 'text',
     field: 'phase1_multiple_policy_choice',
     format: 'stage1_policy_choice',
     allowed_input_description:
-      '0 또는 항목 번호, 필요 시 "번호 add" 또는 "번호 replace"',
-    examples: ['0', '1', '1 add', '1 replace'],
+      hasChiefComplaintItem
+        ? '0 또는 항목 번호, 필요 시 "번호 keep/add/replace" (keep은 chief_complaint에만 사용)'
+        : '0 또는 항목 번호, 필요 시 "번호 add" 또는 "번호 replace"',
+    examples: hasChiefComplaintItem ? ['0', '1', '1 keep', '1 add', '1 replace'] : ['0', '1', '1 add', '1 replace'],
     arg_patch_template: {
       phase1_decision: {
         phase1_multiple_policy_choice: '__USER_INPUT__'
@@ -1622,6 +1660,8 @@ function validateSelectableFieldsAgainstRegistry(transformedPayload, registryRul
 }
 
 function buildPhase1Stage1ChoiceGuide(stage1Preview) {
+  const items = Array.isArray(stage1Preview?.items) ? stage1Preview.items : [];
+  const hasChiefComplaintItem = items.some((item) => item?.key === 'visits.chief_complaint' || item?.field === 'chief_complaint');
   return {
     next_step_type: 'sender_transform',
     send_ready: false,
@@ -1632,8 +1672,10 @@ function buildPhase1Stage1ChoiceGuide(stage1Preview) {
     accepted_choice_input_type: 'text',
     accepted_choice_format: 'stage1_policy_choice',
     allowed_input_description:
-      '0 또는 항목 번호, 필요 시 "번호 add" 또는 "번호 replace"',
-    choice_examples: ['0', '1', '1 add', '1 replace'],
+      hasChiefComplaintItem
+        ? '0 또는 항목 번호, 필요 시 "번호 keep/add/replace" (keep은 chief_complaint에만 사용)'
+        : '0 또는 항목 번호, 필요 시 "번호 add" 또는 "번호 replace"',
+    choice_examples: hasChiefComplaintItem ? ['0', '1', '1 keep', '1 add', '1 replace'] : ['0', '1', '1 add', '1 replace'],
     user_input_prompt: buildPhase1Stage1UserQuestion(stage1Preview),
     arg_patch_examples: {
       keep_defaults: {
@@ -1649,6 +1691,11 @@ function buildPhase1Stage1ChoiceGuide(stage1Preview) {
       force_item_1_add: {
         phase1_decision: {
           phase1_multiple_policy_choice: '1 add'
+        }
+      },
+      force_item_1_keep: {
+        phase1_decision: {
+          phase1_multiple_policy_choice: '1 keep'
         }
       },
       force_item_1_replace: {
@@ -1792,7 +1839,9 @@ function buildPhase1FullPreview(transformedPayload, currentState, headerTouched,
     const policy = resolveFieldPolicy(changeKey, 'chief_complaint', decision);
 
     let afterValue;
-    if (policy === 'add') {
+    if (policy === 'keep_current') {
+      afterValue = before;
+    } else if (policy === 'add') {
       afterValue = isCurrentStateUnavailableValue(before)
         ? incoming
         : mergeChiefComplaintAdd(before, incoming);
@@ -1802,7 +1851,7 @@ function buildPhase1FullPreview(transformedPayload, currentState, headerTouched,
 
     const noOp = currentStateReliable
       ? valuesEqual(before, afterValue, 'visits', 'chief_complaint')
-      : false;
+      : policy === 'keep_current';
 
     headerChanges.push({
       section: 'visits',
@@ -2110,7 +2159,7 @@ function buildPhase1ExecutionPayload(transformedPayload, stage2Preview, headerTo
   });
 
   for (const change of stage2Preview.header_changes || []) {
-    if (change.section === 'visits' && change.field === 'chief_complaint' && !change.no_op) {
+    if (change.section === 'visits' && change.field === 'chief_complaint') {
       finalPayload.visits = finalPayload.visits || {};
       finalPayload.visits.chief_complaint = change.after;
     }
@@ -2234,7 +2283,9 @@ async function buildPhase1TransformEnvelope(payload, transformResult, phase1Deci
     `[${item.number}] ${safeString(item.key || item.field || '')}`,
     `- before: ${formatVisibleValue(item.before)}`,
     `- incoming: ${formatVisibleValue(item.incoming)}`,
-    `- default: ${formatVisibleValue(item.default_policy)}`,
+    ...(item.key === 'visits.chief_complaint' || item.field === 'chief_complaint'
+      ? [`- if keep current: ${formatVisibleValue(item.before)}`]
+      : [`- default: ${formatVisibleValue(item.default_policy)}`]),
     `- if add: ${formatVisibleValue(item.after_if_add)}`,
     `- if replace: ${formatVisibleValue(item.after_if_replace)}`
   ].join('\n');
@@ -2274,13 +2325,30 @@ async function buildPhase1TransformEnvelope(payload, transformResult, phase1Deci
   if ((stage1Preview.items || []).length > 0 && rawStage1Decision === undefined) {
     const stage1Guide = buildPhase1Stage1ChoiceGuide(stage1Preview);
     const stage1UserQuestion = buildPhase1Stage1UserQuestion(stage1Preview);
-    const stage1RequiredInput = buildPhase1Stage1RequiredInput();
+    const stage1RequiredInput = buildPhase1Stage1RequiredInput(stage1Preview);
     const isSingleStage1Item = (stage1Preview.items || []).length === 1;
     const singleStage1Item = isSingleStage1Item ? stage1Preview.items[0] : null;
+    const isSingleChiefComplaintItem =
+      isSingleStage1Item &&
+      (singleStage1Item?.key === 'visits.chief_complaint' || singleStage1Item?.field === 'chief_complaint');
     const previewBodyMarkdown = (stage1Preview.items || [])
       .map((item) => buildStage1ItemBlock(item))
       .join('\n\n');
-    const compactAssistantQuestion = isSingleStage1Item
+    const compactAssistantQuestion = isSingleChiefComplaintItem
+      ? [
+          `${safeString(singleStage1Item?.key || singleStage1Item?.field || '')}`,
+          '',
+          `before: ${formatVisibleValue(singleStage1Item?.before)}`,
+          `incoming: ${formatVisibleValue(singleStage1Item?.incoming)}`,
+          `if keep current: ${formatVisibleValue(singleStage1Item?.before)}`,
+          `if add: ${formatVisibleValue(singleStage1Item?.after_if_add)}`,
+          `if replace: ${formatVisibleValue(singleStage1Item?.after_if_replace)}`,
+          '',
+          '1. keep current',
+          '2. add',
+          '3. replace'
+        ].join('\n')
+      : isSingleStage1Item
       ? [
           `${safeString(singleStage1Item?.key || singleStage1Item?.field || '')}`,
           `- before: ${formatVisibleValue(singleStage1Item?.before)}`,
@@ -2296,7 +2364,44 @@ async function buildPhase1TransformEnvelope(payload, transformResult, phase1Deci
           '',
           stage1UserQuestion
         ].join('\n');
-    const compactRequiredInput = isSingleStage1Item
+    const compactRequiredInput = isSingleChiefComplaintItem
+      ? {
+          type: 'single_number_choice',
+          field: 'phase1_multiple_policy_choice',
+          choices: [
+            {
+              number: 1,
+              label: `keep current — ${formatVisibleValue(singleStage1Item?.before)} -> ${formatVisibleValue(singleStage1Item?.before)}`,
+              value: 'keep_current',
+              arg_patch: {
+                phase1_decision: {
+                  phase1_multiple_policy_choice: `${singleStage1Item.number} keep`
+                }
+              }
+            },
+            {
+              number: 2,
+              label: `add — ${formatVisibleValue(singleStage1Item?.before)} -> ${formatVisibleValue(singleStage1Item?.after_if_add)}`,
+              value: 'add',
+              arg_patch: {
+                phase1_decision: {
+                  phase1_multiple_policy_choice: `${singleStage1Item.number} add`
+                }
+              }
+            },
+            {
+              number: 3,
+              label: `replace — ${formatVisibleValue(singleStage1Item?.before)} -> ${formatVisibleValue(singleStage1Item?.after_if_replace)}`,
+              value: 'replace',
+              arg_patch: {
+                phase1_decision: {
+                  phase1_multiple_policy_choice: `${singleStage1Item.number} replace`
+                }
+              }
+            }
+          ]
+        }
+      : isSingleStage1Item
       ? {
           type: 'single_number_choice',
           field: 'phase1_multiple_policy_choice',
@@ -2359,11 +2464,13 @@ async function buildPhase1TransformEnvelope(payload, transformResult, phase1Deci
       must_ask_user: true,
       user_question: compactAssistantQuestion,
       accepted_input_type: isSingleStage1Item ? 'single_number_choice' : 'text',
-      accepted_format: isSingleStage1Item ? '1_add_or_2_replace' : 'stage1_policy_choice',
-      allowed_input_description: isSingleStage1Item
+      accepted_format: isSingleChiefComplaintItem ? '1_keep_or_2_add_or_3_replace' : isSingleStage1Item ? '1_add_or_2_replace' : 'stage1_policy_choice',
+      allowed_input_description: isSingleChiefComplaintItem
+        ? '1은 keep current, 2는 add, 3은 replace'
+        : isSingleStage1Item
         ? '1은 add, 2는 replace'
-        : '0 또는 항목 번호, 필요 시 "번호 add" 또는 "번호 replace"',
-      allowed_input_examples: isSingleStage1Item ? ['1', '2'] : ['0', '1', '1 add', '1 replace'],
+        : '0 또는 항목 번호, 필요 시 "번호 keep/add/replace" (keep은 chief_complaint에만 사용)',
+      allowed_input_examples: isSingleChiefComplaintItem ? ['1', '2', '3'] : isSingleStage1Item ? ['1', '2'] : ['0', '1', '1 keep', '1 add', '1 replace'],
       allowed_actions: [
         'show_preview',
         isSingleStage1Item ? 'ask_single_number_choice' : 'ask_text_input',
