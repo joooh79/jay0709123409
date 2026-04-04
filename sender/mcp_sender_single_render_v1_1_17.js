@@ -426,6 +426,12 @@ function httpRequestJson(urlString, method = 'GET', body = undefined, timeoutMs 
   });
 }
 
+function isResponseSemanticNotFound(resp) {
+  if (!resp || resp.status !== 404) return false;
+  if (!resp.body || typeof resp.body !== 'object') return false;
+  return resp.body.error === 'not_found' || resp.body.query_status === 'not_found';
+}
+
 async function tryFetchById(fetchId) {
   const candidates = buildCurrentStateFetchCandidates(fetchId);
   if (candidates.length === 0) {
@@ -460,6 +466,15 @@ async function tryFetchById(fetchId) {
         if (resp.ok) {
           return {
             ...resp,
+            attempted_urls: attempted,
+            retry_rounds_used: round + 1
+          };
+        }
+        if (isResponseSemanticNotFound(resp)) {
+          return {
+            ...resp,
+            ok: false,
+            semantic_not_found: true,
             attempted_urls: attempted,
             retry_rounds_used: round + 1
           };
@@ -540,6 +555,8 @@ function getVisitRecordIdFromBody(body) {
 }
 
 function getPatientExistsFromBody(body) {
+  if (!body || typeof body !== 'object') return null;
+  if (body.error === 'not_found' || body.query_status === 'not_found') return false;
   if (typeof body?.patient_exists === 'boolean') return body.patient_exists;
   if (typeof body?.result?.patient_exists === 'boolean') return body.result.patient_exists;
   const fields = getRecordFields(body);
@@ -2938,8 +2955,9 @@ async function buildNewPatientPatientFoundTransformEnvelope(payload, transformRe
   const patientId = safeString(transformedPayload?.patients?.patient_id);
   const patientResp = await fetchPatient(patientId);
   const isRelookupAttempt = decision === 'reenter_patient_id' && !!replacementPatientId;
+  const isReallyUnavailable = !(patientResp && patientResp.ok) && !patientResp?.semantic_not_found;
 
-  if (!(patientResp && patientResp.ok)) {
+  if (isReallyUnavailable) {
     const stopMessage = isRelookupAttempt
       ? `새 patient_id ${patientId || '(blank)'} 로 다시 확인하려 했지만 현재 다시 확인할 수 없습니다. 잠시 후 다시 시도해 주세요.`
       : '현재 다시 확인할 수 없습니다. 잠시 후 다시 시도해 주세요.';
