@@ -2225,39 +2225,47 @@ const stage1Preview = currentState.ready
 
 const rawStage1Decision = extractPhase1Stage1Input(phase1DecisionRaw);
 
-if ((stage1Preview.items || []).length > 0 && rawStage1Decision === undefined) {
-  const stage1Guide = buildPhase1Stage1ChoiceGuide(stage1Preview);
-  const stage1UserQuestion = buildPhase1Stage1UserQuestion(stage1Preview);
-  const stage1RequiredInput = buildPhase1Stage1RequiredInput();
-  const isSingleStage1Item = (stage1Preview.items || []).length === 1;
-  const singleStage1Item = isSingleStage1Item ? stage1Preview.items[0] : null;
-  const previewBodyMarkdown = (stage1Preview.items || [])
-    .map((item) => {
-      const formatValue = (value) => {
-        if (value === undefined || value === null || value === '') return '(empty)';
-        if (Array.isArray(value)) {
-          const normalized = value
-            .map((entry) => safeString(entry).trim())
-            .filter(Boolean);
-          return normalized.length > 0 ? normalized.join(', ') : '(empty)';
-        }
-        if (typeof value === 'object') return JSON.stringify(value);
-        return String(value);
-      };
-
-      return [
-        `[${item.number}] ${safeString(item.key || item.field || '')}`,
-        `- before: ${formatValue(item.before)}`,
-        `- incoming: ${formatValue(item.incoming)}`,
-        `- default: ${formatValue(item.default_policy)}`,
-        `- if add: ${formatValue(item.after_if_add)}`,
-        `- if replace: ${formatValue(item.after_if_replace)}`
-      ].join('\n');
-    })
-    .join('\n\n');
-  const compactAssistantQuestion = isSingleStage1Item
-    ? '1. add\n2. replace'
-    : stage1UserQuestion;
+	if ((stage1Preview.items || []).length > 0 && rawStage1Decision === undefined) {
+	  const stage1Guide = buildPhase1Stage1ChoiceGuide(stage1Preview);
+	  const stage1UserQuestion = buildPhase1Stage1UserQuestion(stage1Preview);
+	  const stage1RequiredInput = buildPhase1Stage1RequiredInput();
+	  const isSingleStage1Item = (stage1Preview.items || []).length === 1;
+	  const singleStage1Item = isSingleStage1Item ? stage1Preview.items[0] : null;
+	  const formatStage1PreviewValue = (value) => {
+	    if (value === undefined || value === null || value === '') return '(empty)';
+	    if (Array.isArray(value)) {
+	      const normalized = value
+	        .map((entry) => safeString(entry).trim())
+	        .filter(Boolean);
+	      return normalized.length > 0 ? normalized.join(', ') : '(empty)';
+	    }
+	    if (typeof value === 'object') return JSON.stringify(value);
+	    return String(value);
+	  };
+	  const previewBodyMarkdown = (stage1Preview.items || [])
+	    .map((item) => {
+	      return [
+	        `[${item.number}] ${safeString(item.key || item.field || '')}`,
+	        `- before: ${formatStage1PreviewValue(item.before)}`,
+	        `- incoming: ${formatStage1PreviewValue(item.incoming)}`,
+	        `- default: ${formatStage1PreviewValue(item.default_policy)}`,
+	        `- if add: ${formatStage1PreviewValue(item.after_if_add)}`,
+	        `- if replace: ${formatStage1PreviewValue(item.after_if_replace)}`
+	      ].join('\n');
+	    })
+	    .join('\n\n');
+	  const compactAssistantQuestion = isSingleStage1Item
+	    ? [
+	        `${safeString(singleStage1Item?.key || singleStage1Item?.field || '')}`,
+	        `- before: ${formatStage1PreviewValue(singleStage1Item?.before)}`,
+	        `- incoming: ${formatStage1PreviewValue(singleStage1Item?.incoming)}`,
+	        `- if add: ${formatStage1PreviewValue(singleStage1Item?.after_if_add)}`,
+	        `- if replace: ${formatStage1PreviewValue(singleStage1Item?.after_if_replace)}`,
+	        '',
+	        '1. add',
+	        '2. replace'
+	      ].join('\n')
+	    : stage1UserQuestion;
   const compactRequiredInput = isSingleStage1Item
     ? {
         type: 'single_number_choice',
