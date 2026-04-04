@@ -1802,6 +1802,30 @@ if ((stage1Preview.items || []).length > 0 && rawStage1Decision === undefined) {
   const stage1Guide = buildPhase1Stage1ChoiceGuide(stage1Preview);
   const stage1UserQuestion = buildPhase1Stage1UserQuestion(stage1Preview);
   const stage1RequiredInput = buildPhase1Stage1RequiredInput();
+  const previewBodyMarkdown = (stage1Preview.items || [])
+    .map((item) => {
+      const formatValue = (value) => {
+        if (value === undefined || value === null || value === '') return '(empty)';
+        if (Array.isArray(value)) {
+          const normalized = value
+            .map((entry) => safeString(entry).trim())
+            .filter(Boolean);
+          return normalized.length > 0 ? normalized.join(', ') : '(empty)';
+        }
+        if (typeof value === 'object') return JSON.stringify(value);
+        return String(value);
+      };
+
+      return [
+        `[${item.number}] ${safeString(item.key || item.field || '')}`,
+        `- before: ${formatValue(item.before)}`,
+        `- incoming: ${formatValue(item.incoming)}`,
+        `- default: ${formatValue(item.default_policy)}`,
+        `- if add: ${formatValue(item.after_if_add)}`,
+        `- if replace: ${formatValue(item.after_if_replace)}`
+      ].join('\n');
+    })
+    .join('\n\n');
 
   return {
     ok: true,
@@ -1824,6 +1848,7 @@ if ((stage1Preview.items || []).length > 0 && rawStage1Decision === undefined) {
       ui_kind: 'preview_confirmation',
       user_message: '기존 방문 업데이트 multiple preview입니다. 아래 내용을 확인한 뒤 입력해 주세요.',
       assistant_question: stage1UserQuestion,
+      preview_body_markdown: previewBodyMarkdown,
       required_user_input: stage1RequiredInput,
       next_step: stage1Guide,
       do_not_ask: []
