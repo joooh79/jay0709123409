@@ -2266,29 +2266,29 @@ const rawStage1Decision = extractPhase1Stage1Input(phase1DecisionRaw);
 	        '2. replace'
 	      ].join('\n')
 	    : stage1UserQuestion;
-  const compactRequiredInput = isSingleStage1Item
-    ? {
-        type: 'single_number_choice',
-        field: 'phase1_multiple_policy_choice',
-        choices: [
-          {
-            number: 1,
-            label: 'add',
-            value: 'add',
-            arg_patch: {
-              phase1_decision: {
-                phase1_multiple_policy_choice: `${singleStage1Item.number} add`
-              }
+	  const compactRequiredInput = isSingleStage1Item
+	    ? {
+	        type: 'single_number_choice',
+	        field: 'phase1_multiple_policy_choice',
+	        choices: [
+	          {
+	            number: 1,
+	            label: `add — ${formatStage1PreviewValue(singleStage1Item?.before)} -> ${formatStage1PreviewValue(singleStage1Item?.after_if_add)}`,
+	            value: 'add',
+	            arg_patch: {
+	              phase1_decision: {
+	                phase1_multiple_policy_choice: `${singleStage1Item.number} add`
+	              }
             }
           },
-          {
-            number: 2,
-            label: 'replace',
-            value: 'replace',
-            arg_patch: {
-              phase1_decision: {
-                phase1_multiple_policy_choice: `${singleStage1Item.number} replace`
-              }
+	          {
+	            number: 2,
+	            label: `replace — ${formatStage1PreviewValue(singleStage1Item?.before)} -> ${formatStage1PreviewValue(singleStage1Item?.after_if_replace)}`,
+	            value: 'replace',
+	            arg_patch: {
+	              phase1_decision: {
+	                phase1_multiple_policy_choice: `${singleStage1Item.number} replace`
+	              }
             }
           }
         ]
