@@ -2218,82 +2218,108 @@ async function buildPhase1TransformEnvelope(payload, transformResult, phase1Deci
     };
   }
 
+  const formatVisibleValue = (value) => {
+    if (value === undefined || value === null || value === '') return '(empty)';
+    if (Array.isArray(value)) {
+      const normalized = value
+        .map((entry) => safeString(entry).trim())
+        .filter(Boolean);
+      return normalized.length > 0 ? normalized.join(', ') : '(empty)';
+    }
+    if (typeof value === 'object') return JSON.stringify(value);
+    return String(value);
+  };
 
-const stage1Preview = currentState.ready
-  ? buildPhase1MultiplePreview(transformedPayload, currentState)
-  : { stage: 'multiple_policy_preview', items: [], prompt: '' };
+  const buildStage1ItemBlock = (item) => [
+    `[${item.number}] ${safeString(item.key || item.field || '')}`,
+    `- before: ${formatVisibleValue(item.before)}`,
+    `- incoming: ${formatVisibleValue(item.incoming)}`,
+    `- default: ${formatVisibleValue(item.default_policy)}`,
+    `- if add: ${formatVisibleValue(item.after_if_add)}`,
+    `- if replace: ${formatVisibleValue(item.after_if_replace)}`
+  ].join('\n');
 
-const rawStage1Decision = extractPhase1Stage1Input(phase1DecisionRaw);
+  const buildStage2HeaderBlock = (change) => [
+    `[header] ${safeString(change.section)}.${safeString(change.field)}`,
+    `- before: ${formatVisibleValue(change.before)}`,
+    `- incoming: ${formatVisibleValue(change.incoming)}`,
+    `- after: ${formatVisibleValue(change.after)}`
+  ].join('\n');
 
-	if ((stage1Preview.items || []).length > 0 && rawStage1Decision === undefined) {
-	  const stage1Guide = buildPhase1Stage1ChoiceGuide(stage1Preview);
-	  const stage1UserQuestion = buildPhase1Stage1UserQuestion(stage1Preview);
-	  const stage1RequiredInput = buildPhase1Stage1RequiredInput();
-	  const isSingleStage1Item = (stage1Preview.items || []).length === 1;
-	  const singleStage1Item = isSingleStage1Item ? stage1Preview.items[0] : null;
-	  const formatStage1PreviewValue = (value) => {
-	    if (value === undefined || value === null || value === '') return '(empty)';
-	    if (Array.isArray(value)) {
-	      const normalized = value
-	        .map((entry) => safeString(entry).trim())
-	        .filter(Boolean);
-	      return normalized.length > 0 ? normalized.join(', ') : '(empty)';
-	    }
-	    if (typeof value === 'object') return JSON.stringify(value);
-	    return String(value);
-	  };
-	  const previewBodyMarkdown = (stage1Preview.items || [])
-	    .map((item) => {
-	      return [
-	        `[${item.number}] ${safeString(item.key || item.field || '')}`,
-	        `- before: ${formatStage1PreviewValue(item.before)}`,
-	        `- incoming: ${formatStage1PreviewValue(item.incoming)}`,
-	        `- default: ${formatStage1PreviewValue(item.default_policy)}`,
-	        `- if add: ${formatStage1PreviewValue(item.after_if_add)}`,
-	        `- if replace: ${formatStage1PreviewValue(item.after_if_replace)}`
-	      ].join('\n');
-	    })
-	    .join('\n\n');
-	  const compactAssistantQuestion = isSingleStage1Item
-	    ? [
-	        `${safeString(singleStage1Item?.key || singleStage1Item?.field || '')}`,
-	        `- before: ${formatStage1PreviewValue(singleStage1Item?.before)}`,
-	        `- incoming: ${formatStage1PreviewValue(singleStage1Item?.incoming)}`,
-	        `- if add: ${formatStage1PreviewValue(singleStage1Item?.after_if_add)}`,
-	        `- if replace: ${formatStage1PreviewValue(singleStage1Item?.after_if_replace)}`,
-	        '',
-	        '1. add',
-	        '2. replace'
-	      ].join('\n')
-	    : stage1UserQuestion;
-	  const compactRequiredInput = isSingleStage1Item
-	    ? {
-	        type: 'single_number_choice',
-	        field: 'phase1_multiple_policy_choice',
-	        choices: [
-	          {
-	            number: 1,
-	            label: `add — ${formatStage1PreviewValue(singleStage1Item?.before)} -> ${formatStage1PreviewValue(singleStage1Item?.after_if_add)}`,
-	            value: 'add',
-	            arg_patch: {
-	              phase1_decision: {
-	                phase1_multiple_policy_choice: `${singleStage1Item.number} add`
-	              }
+  const buildStage2FindingBlock = (change) => {
+    const lines = [
+      `[finding] ${safeString(change.branch)} tooth ${safeString(change.tooth_number)} ${safeString(change.field)}`,
+      `- before: ${formatVisibleValue(change.before)}`,
+      `- incoming: ${formatVisibleValue(change.incoming)}`,
+      `- after: ${formatVisibleValue(change.after)}`
+    ];
+
+    if (change.pending_row_creation) {
+      lines.push('- row: 신규 행 생성 예정');
+    }
+
+    return lines.join('\n');
+  };
+
+  const stage1Preview = currentState.ready
+    ? buildPhase1MultiplePreview(transformedPayload, currentState)
+    : { stage: 'multiple_policy_preview', items: [], prompt: '' };
+
+  const rawStage1Decision = extractPhase1Stage1Input(phase1DecisionRaw);
+
+  if ((stage1Preview.items || []).length > 0 && rawStage1Decision === undefined) {
+    const stage1Guide = buildPhase1Stage1ChoiceGuide(stage1Preview);
+    const stage1UserQuestion = buildPhase1Stage1UserQuestion(stage1Preview);
+    const stage1RequiredInput = buildPhase1Stage1RequiredInput();
+    const isSingleStage1Item = (stage1Preview.items || []).length === 1;
+    const singleStage1Item = isSingleStage1Item ? stage1Preview.items[0] : null;
+    const previewBodyMarkdown = (stage1Preview.items || [])
+      .map((item) => buildStage1ItemBlock(item))
+      .join('\n\n');
+    const compactAssistantQuestion = isSingleStage1Item
+      ? [
+          `${safeString(singleStage1Item?.key || singleStage1Item?.field || '')}`,
+          `- before: ${formatVisibleValue(singleStage1Item?.before)}`,
+          `- incoming: ${formatVisibleValue(singleStage1Item?.incoming)}`,
+          `- if add: ${formatVisibleValue(singleStage1Item?.after_if_add)}`,
+          `- if replace: ${formatVisibleValue(singleStage1Item?.after_if_replace)}`,
+          '',
+          '1. add',
+          '2. replace'
+        ].join('\n')
+      : [
+          previewBodyMarkdown,
+          '',
+          stage1UserQuestion
+        ].join('\n');
+    const compactRequiredInput = isSingleStage1Item
+      ? {
+          type: 'single_number_choice',
+          field: 'phase1_multiple_policy_choice',
+          choices: [
+            {
+              number: 1,
+              label: `add — ${formatVisibleValue(singleStage1Item?.before)} -> ${formatVisibleValue(singleStage1Item?.after_if_add)}`,
+              value: 'add',
+              arg_patch: {
+                phase1_decision: {
+                  phase1_multiple_policy_choice: `${singleStage1Item.number} add`
+                }
+              }
+            },
+            {
+              number: 2,
+              label: `replace — ${formatVisibleValue(singleStage1Item?.before)} -> ${formatVisibleValue(singleStage1Item?.after_if_replace)}`,
+              value: 'replace',
+              arg_patch: {
+                phase1_decision: {
+                  phase1_multiple_policy_choice: `${singleStage1Item.number} replace`
+                }
+              }
             }
-          },
-	          {
-	            number: 2,
-	            label: `replace — ${formatStage1PreviewValue(singleStage1Item?.before)} -> ${formatStage1PreviewValue(singleStage1Item?.after_if_replace)}`,
-	            value: 'replace',
-	            arg_patch: {
-	              phase1_decision: {
-	                phase1_multiple_policy_choice: `${singleStage1Item.number} replace`
-	              }
-            }
-          }
-        ]
-      }
-    : stage1RequiredInput;
+          ]
+        }
+      : stage1RequiredInput;
 
   return {
     ok: true,
@@ -2354,24 +2380,38 @@ const rawStage1Decision = extractPhase1Stage1Input(phase1DecisionRaw);
   };
 }
 
-const phase1Decision = parsePhase1Decision(rawStage1Decision, stage1Preview);
-  const stage2Preview = buildPhase1FullPreview(
-    transformedPayload,
-    currentState,
-    headerTouched,
+  const phase1Decision = parsePhase1Decision(rawStage1Decision, stage1Preview);
+	  const stage2Preview = buildPhase1FullPreview(
+	    transformedPayload,
+	    currentState,
+	    headerTouched,
     findingsTouched,
     phase1Decision
   );
-  const finalExecutionPayload = buildPhase1ExecutionPayload(
-    transformedPayload,
-    stage2Preview,
-    headerTouched,
-    phase1Decision
-  );
-
-  return {
-    ok: true,
-    tool: 'sender_transform',
+	  const finalExecutionPayload = buildPhase1ExecutionPayload(
+	    transformedPayload,
+	    stage2Preview,
+	    headerTouched,
+	    phase1Decision
+	  );
+  const stage2HeaderSummary = (stage2Preview.header_changes || []).length > 0
+    ? (stage2Preview.header_changes || []).map((change) => buildStage2HeaderBlock(change)).join('\n\n')
+    : '[header]\n- none';
+  const stage2FindingsSummary = (stage2Preview.findings_changes || []).length > 0
+    ? (stage2Preview.findings_changes || []).map((change) => buildStage2FindingBlock(change)).join('\n\n')
+    : '[finding]\n- none';
+  const stage2AssistantQuestion = [
+    stage2HeaderSummary,
+    '',
+    stage2FindingsSummary,
+    '',
+    '1. 이대로 진행',
+    '2. 취소'
+  ].join('\n');
+	
+	  return {
+	    ok: true,
+	    tool: 'sender_transform',
     request_id: transformResult.request_id,
     status: transformResult.status,
     stage: 'PHASE1_STAGE2_PREVIEW',
@@ -2390,14 +2430,14 @@ const phase1Decision = parsePhase1Decision(rawStage1Decision, stage1Preview);
       stage2_preview: stage2Preview,
       next_step: buildPhase1Stage2ChoiceGuide()
     },
-    interaction: {
-      mode: 'ask_user',
-      ui_kind: 'preview_confirmation',
-      user_message: '기존 방문 업데이트 full preview입니다. 아래 내용을 확인한 뒤 숫자로 선택해 주세요.',
-      assistant_question: '숫자만 입력해 주세요.\n1. 이대로 진행\n2. 취소',
-      required_user_input: {
-        type: 'single_number_choice',
-        field: 'phase1_full_preview_confirmation',
+	    interaction: {
+	      mode: 'ask_user',
+	      ui_kind: 'preview_confirmation',
+	      user_message: '기존 방문 업데이트 full preview입니다. 아래 내용을 확인한 뒤 숫자로 선택해 주세요.',
+	      assistant_question: stage2AssistantQuestion,
+	      required_user_input: {
+	        type: 'single_number_choice',
+	        field: 'phase1_full_preview_confirmation',
         choices: [
           { number: 1, label: '이대로 진행', value: 'send_now', arg_patch: { phase1_decision: { phase1_full_preview_confirmation: 1 } } },
           { number: 2, label: '취소', value: 'cancel', arg_patch: { phase1_decision: { phase1_full_preview_confirmation: 2 } } }
@@ -2407,14 +2447,14 @@ const phase1Decision = parsePhase1Decision(rawStage1Decision, stage1Preview);
       next_step: buildPhase1Stage2ChoiceGuide(),
       do_not_ask: []
     },
-    execution_contract: {
-      contract_version: '1.0',
-      mode: 'await_user_choice',
-      must_show_message: true,
-      user_visible_message: '기존 방문 업데이트 full preview입니다. 아래 내용을 확인한 뒤 숫자로 선택해 주세요.',
-      must_ask_user: true,
-      user_question: '1. 이대로 진행\n2. 취소',
-      accepted_input_type: 'single_number_choice',
+	    execution_contract: {
+	      contract_version: '1.0',
+	      mode: 'await_user_choice',
+	      must_show_message: true,
+	      user_visible_message: '기존 방문 업데이트 full preview입니다. 아래 내용을 확인한 뒤 숫자로 선택해 주세요.',
+	      must_ask_user: true,
+	      user_question: stage2AssistantQuestion,
+	      accepted_input_type: 'single_number_choice',
       allowed_numbers: [1, 2],
       number_meanings: {
         '1': 'send_now',
