@@ -1235,7 +1235,34 @@ function valuesEqual(a, b, section = '', field = '') {
   return JSON.stringify(normalizeComparableValue(section, field, a)) === JSON.stringify(normalizeComparableValue(section, field, b));
 }
 
-function buildPhase1Stage1ChoiceGuide() {
+function buildPhase1Stage1UserQuestion(stage1Preview) {
+  const prompt = safeString(stage1Preview?.prompt).trim();
+  const toggleHint = '항목 번호만 입력하면 해당 항목이 non-default policy로 전환됩니다. (예: "1")';
+
+  if (!prompt) {
+    return `${toggleHint}\n정책을 명시하려면 "번호 add" 또는 "번호 replace" 형식으로 입력하세요. 0 입력하면 모두 기본값 유지`;
+  }
+
+  return `${prompt}\n${toggleHint}`;
+}
+
+function buildPhase1Stage1RequiredInput() {
+  return {
+    type: 'text',
+    field: 'phase1_multiple_policy_choice',
+    format: 'stage1_policy_choice',
+    allowed_input_description:
+      '0 또는 항목 번호, 필요 시 "번호 add" 또는 "번호 replace"',
+    examples: ['0', '1', '1 add', '1 replace'],
+    arg_patch_template: {
+      phase1_decision: {
+        phase1_multiple_policy_choice: '__USER_INPUT__'
+      }
+    }
+  };
+}
+
+function buildPhase1Stage1ChoiceGuide(stage1Preview) {
   return {
     next_step_type: 'sender_transform',
     send_ready: false,
@@ -1243,19 +1270,31 @@ function buildPhase1Stage1ChoiceGuide() {
     requires_choice_args: true,
     confirmation_field_path: '',
     choice_field_path: 'phase1_decision.phase1_multiple_policy_choice',
-    confirmation_value_for_each_choice: {
-      '0': 'keep_add',
-      '1': 'replace'
-    },
-    arg_patch_per_choice: {
-      '0': {
+    accepted_choice_input_type: 'text',
+    accepted_choice_format: 'stage1_policy_choice',
+    allowed_input_description:
+      '0 또는 항목 번호, 필요 시 "번호 add" 또는 "번호 replace"',
+    choice_examples: ['0', '1', '1 add', '1 replace'],
+    user_input_prompt: buildPhase1Stage1UserQuestion(stage1Preview),
+    arg_patch_examples: {
+      keep_defaults: {
         phase1_decision: {
           phase1_multiple_policy_choice: 0
         }
       },
-      '1': {
+      toggle_item_1_to_non_default: {
         phase1_decision: {
           phase1_multiple_policy_choice: 1
+        }
+      },
+      force_item_1_add: {
+        phase1_decision: {
+          phase1_multiple_policy_choice: '1 add'
+        }
+      },
+      force_item_1_replace: {
+        phase1_decision: {
+          phase1_multiple_policy_choice: '1 replace'
         }
       }
     }
@@ -1395,7 +1434,9 @@ function buildPhase1FullPreview(transformedPayload, currentState, headerTouched,
 
     let afterValue;
     if (policy === 'add') {
-      afterValue = mergeChiefComplaintAdd(before, incoming);
+      afterValue = isCurrentStateUnavailableValue(before)
+        ? incoming
+        : mergeChiefComplaintAdd(before, incoming);
     } else {
       afterValue = incoming;
     }
@@ -1758,6 +1799,10 @@ const stage1Preview = currentState.ready
 const rawStage1Decision = extractPhase1Stage1Input(phase1DecisionRaw);
 
 if ((stage1Preview.items || []).length > 0 && rawStage1Decision === undefined) {
+  const stage1Guide = buildPhase1Stage1ChoiceGuide(stage1Preview);
+  const stage1UserQuestion = buildPhase1Stage1UserQuestion(stage1Preview);
+  const stage1RequiredInput = buildPhase1Stage1RequiredInput();
+
   return {
     ok: true,
     tool: 'sender_transform',
@@ -1772,40 +1817,32 @@ if ((stage1Preview.items || []).length > 0 && rawStage1Decision === undefined) {
       stage: 1,
       current_state_ready: true,
       stage1_preview: stage1Preview,
-      next_step: buildPhase1Stage1ChoiceGuide()
+      next_step: stage1Guide
     },
     interaction: {
       mode: 'ask_user',
       ui_kind: 'preview_confirmation',
-      user_message: '기존 방문 업데이트 multiple preview입니다. 아래 내용을 확인한 뒤 숫자로 선택해 주세요.',
-      assistant_question: `${stage1Preview.prompt}\n0. 그대로 add\n1. replace로 변경`,
-      required_user_input: {
-        type: 'single_number_choice',
-        field: 'phase1_multiple_policy_choice',
-        choices: [
-          { number: 0, label: '그대로 add', value: 'keep_add', arg_patch: { phase1_decision: { phase1_multiple_policy_choice: 0 } } },
-          { number: 1, label: 'replace로 변경', value: 'replace', arg_patch: { phase1_decision: { phase1_multiple_policy_choice: 1 } } }
-        ]
-      },
-      next_step: buildPhase1Stage1ChoiceGuide(),
+      user_message: '기존 방문 업데이트 multiple preview입니다. 아래 내용을 확인한 뒤 입력해 주세요.',
+      assistant_question: stage1UserQuestion,
+      required_user_input: stage1RequiredInput,
+      next_step: stage1Guide,
       do_not_ask: []
     },
     execution_contract: {
       contract_version: '1.0',
       mode: 'await_user_choice',
       must_show_message: true,
-      user_visible_message: '기존 방문 업데이트 multiple preview입니다. 아래 내용을 확인한 뒤 숫자로 선택해 주세요.',
+      user_visible_message: '기존 방문 업데이트 multiple preview입니다. 아래 내용을 확인한 뒤 입력해 주세요.',
       must_ask_user: true,
-      user_question: '0. 그대로 add\n1. replace로 변경',
-      accepted_input_type: 'single_number_choice',
-      allowed_numbers: [0, 1],
-      number_meanings: {
-        '0': 'keep_add',
-        '1': 'replace'
-      },
+      user_question: stage1UserQuestion,
+      accepted_input_type: 'text',
+      accepted_format: 'stage1_policy_choice',
+      allowed_input_description:
+        '0 또는 항목 번호, 필요 시 "번호 add" 또는 "번호 replace"',
+      allowed_input_examples: ['0', '1', '1 add', '1 replace'],
       allowed_actions: [
         'show_preview',
-        'ask_single_number_choice',
+        'ask_text_input',
         'build_full_preview_after_user_choice'
       ],
       forbidden_actions: [
@@ -1813,7 +1850,7 @@ if ((stage1Preview.items || []).length > 0 && rawStage1Decision === undefined) {
       ],
       auto_resend_allowed: false,
       stop_after_response: false,
-      next_step: buildPhase1Stage1ChoiceGuide()
+      next_step: stage1Guide
     },
     debug: {
       ...transformResult.debug,
