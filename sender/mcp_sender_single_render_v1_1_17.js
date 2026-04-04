@@ -2241,6 +2241,8 @@ async function buildPhase1TransformEnvelope(payload, transformResult, phase1Deci
 
   const buildStage2HeaderBlock = (change) => [
     `[header] ${safeString(change.section)}.${safeString(change.field)}`,
+    `- 상태: ${formatVisibleValue(change.label)}`,
+    `- policy: ${formatVisibleValue(change.policy)}`,
     `- before: ${formatVisibleValue(change.before)}`,
     `- incoming: ${formatVisibleValue(change.incoming)}`,
     `- after: ${formatVisibleValue(change.after)}`
@@ -2249,6 +2251,8 @@ async function buildPhase1TransformEnvelope(payload, transformResult, phase1Deci
   const buildStage2FindingBlock = (change) => {
     const lines = [
       `[finding] ${safeString(change.branch)} tooth ${safeString(change.tooth_number)} ${safeString(change.field)}`,
+      `- 상태: ${formatVisibleValue(change.label)}`,
+      `- policy: ${formatVisibleValue(change.policy)}`,
       `- before: ${formatVisibleValue(change.before)}`,
       `- incoming: ${formatVisibleValue(change.incoming)}`,
       `- after: ${formatVisibleValue(change.after)}`
