@@ -13,6 +13,7 @@ const CURRENT_STATE_MCP_BASE_URL = process.env.CURRENT_STATE_MCP_BASE_URL || '';
 const CURRENT_STATE_FETCH_ROUNDS = Math.max(1, Number(process.env.CURRENT_STATE_FETCH_ROUNDS || 3));
 const CURRENT_STATE_FETCH_TIMEOUT_MS = Math.max(3000, Number(process.env.CURRENT_STATE_FETCH_TIMEOUT_MS || 12000));
 const CURRENT_STATE_FETCH_BACKOFF_MS = Math.max(0, Number(process.env.CURRENT_STATE_FETCH_BACKOFF_MS || 800));
+const SENDER_RUNTIME_VERSION = '1.1.17-phase1-closeout';
 
 const sessions = new Map();
 
@@ -4496,7 +4497,7 @@ function runHealthTool() {
   return {
     ok: true,
     service: 'mcp-sender-v1-render-single',
-    version: '1.1.16-phase1-existing-visit-update-hotfix16',
+    version: SENDER_RUNTIME_VERSION,
     enable_network_send: !!MAKE_WEBHOOK_URL,
     webhook_url: MAKE_WEBHOOK_URL || '',
     current_state_mcp_configured: !!CURRENT_STATE_MCP_BASE_URL
@@ -4652,7 +4653,7 @@ async function handleRpc(sessionId, message) {
       },
       serverInfo: {
         name: 'ai-dental-clinic-sender',
-        version: '1.0.0'
+        version: SENDER_RUNTIME_VERSION
       }
     });
   }
@@ -4718,7 +4719,7 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, {
         ok: true,
         service: 'ai-dental-clinic-mcp-sse-server',
-        version: '1.0.0',
+        version: SENDER_RUNTIME_VERSION,
         enable_network_send: !!MAKE_WEBHOOK_URL,
         webhook_url: MAKE_WEBHOOK_URL || ''
       });
@@ -4775,7 +4776,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && pathname === '/manifest') {
       return sendJson(res, 200, {
         name: 'ai-dental-clinic-sender',
-        version: '1.0.0',
+        version: SENDER_RUNTIME_VERSION,
         tools: toolDefinitions()
       });
     }
