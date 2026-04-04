@@ -1,0 +1,110 @@
+PATCH_CONTEXT_hotfix17d.txt
+
+hotfix id:
+- hotfix17d
+
+scope:
+- sender-side only
+- file target: mcp_sender_single_render_v1.js
+- do not redesign Make
+- do not change runtime shape
+- do not change same-date correction baseline
+- do not change patient recheck baseline except for regression safety
+
+target flow:
+- new_patient conflict intercept
+- choice 2
+- replacement patient_id input
+- current-state relookup
+- explicit 3-way handling:
+  1. found
+  2. not_found
+  3. unavailable
+
+current status:
+- hotfix17c improved the found-after-reenter loop risk
+- TC-1 pass
+- TC-2 pass
+- TC-3 pass
+- TC-4 unclear
+- remaining issues are finishing issues, not full redesign issues
+
+confirmed remaining issues:
+1. not_found after replacement patient_id is still not explicit enough
+2. stale choice-2 state may remain implicitly active after replacement patient_id submission
+3. transform/send unavailable contract is not fully consistent
+4. some user-facing wording still leaks internal orchestration wording
+
+required behavior:
+1. found after reenter
+- do not return REINPUT_REQUIRED again blindly
+- return updated conflict preview or explicit existing-patient path
+- no infinite reinput loop
+
+2. not_found after reenter
+- handle explicitly
+- do not leave this only as an implicit return-null fallback
+- the code path should clearly represent that conflict is resolved and normal new_patient_new_visit preview can continue
+
+3. unavailable after reenter
+- safe stop
+- retry-later style user-facing message
+- transform and send contracts should be aligned
+
+4. stale state handling
+- once replacement patient_id has been submitted, do not keep choice-2 reentry state alive longer than needed
+- separate:
+  - ask-for-input state
+  - submitted-and-relookup state
+
+5. wording integrity
+- remove user-facing wording that exposes internal tool choreography
+- avoid phrases like:
+  - sender_transform
+  - preview를 연 뒤
+  - 자동 진행을 멈췄습니다
+- prefer route-meaning wording only
+
+implementation constraints:
+- minimal patch only
+- no large refactor
+- keep surrounding existing flows stable
+- preserve preview-first behavior
+- preserve transform-before-send behavior
+
+important non-target flows:
+- same-date correction path
+- existing_patient_new_visit path
+- patient recheck path
+
+regression expectation:
+- no regression to same-date correction
+- no regression to existing_patient_new_visit
+- no regression to patient recheck
+
+test cases to verify:
+TC-1
+- initial conflict intercept for new_patient claim with existing patient
+- expected: conflict preview with choices
+
+TC-2
+- choice 2 -> replacement patient_id entered -> relookup = not_found
+- expected: explicit resolved path, then normal new_patient_new_visit preview continuation
+
+TC-3
+- choice 2 -> replacement patient_id entered -> relookup = found
+- expected: updated conflict preview or explicit existing-patient path
+- forbidden: blind REINPUT_REQUIRED loop
+
+TC-4
+- choice 2 -> replacement patient_id entered -> relookup unavailable
+- expected: safe stop + retry-later style user-facing message
+- transform/send contract meaning should match
+
+output requirement:
+- full replacement file only
+- filename: mcp_sender_single_render_v1.js
+- include short note:
+  1. exact changed functions
+  2. exact new or changed branches
+  3. TC-1 to TC-4 expected path summary

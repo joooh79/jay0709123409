@@ -1,0 +1,123 @@
+AI DENTAL CLINIC — MCP SENDER v2 IMPLEMENTATION REFERENCE
+FINAL
+
+STATUS
+- subordinate implementation/deployment reference source
+- records the implementation artifact identity for the active MCP Sender v2 runtime
+- does not replace the operational protocol
+- does not replace code files themselves
+- does not authorize local implementation drift
+
+ROLE
+This document identifies the code artifacts that implement the current MCP Sender v2 runtime shape and explains their role boundaries.
+
+==================================================
+1. IMPLEMENTATION ARTIFACT SET
+==================================================
+
+The current implementation artifact set is:
+- proxy-worker.js
+- mcp_sender_single_render_v1.js
+- package.json
+
+These files are the locked implementation references for the current MCP Sender v2 runtime shape unless SAG approves a different artifact set.
+
+==================================================
+2. proxy-worker.js ROLE
+==================================================
+
+proxy-worker.js is the Cloudflare Worker warm-up proxy layer.
+
+Its implementation role is:
+- public MCP entry surface
+- pre-proxy wake/readiness waiting
+- upstream /health probing
+- proxying non-/proxy-health requests to the upstream sender after readiness
+- returning Worker-side readiness failure when upstream wake does not complete in time
+
+Current implementation identity observed in code:
+- /proxy-health endpoint exists
+- all non-/proxy-health paths wait for upstream wake before proxying
+- Worker behavior depends on UPSTREAM_BASE_URL and wake-related timeout/retry environment keys
+
+==================================================
+3. mcp_sender_single_render_v1.js ROLE
+==================================================
+
+mcp_sender_single_render_v1.js is the single Render sender server layer.
+
+Its implementation role is:
+- MCP sender server process
+- canonical payload validation
+- canonical-to-sender transformation
+- preview summary generation
+- preview-confirmation interaction contract generation
+- Make webhook send
+- normalized result interpretation
+
+Current implementation identity observed in code:
+- server host/port are runtime-configurable
+- MAKE_WEBHOOK_URL is the upstream send target
+- preview summary / interaction / execution contract are built sender-side
+- accepted_no_json-compatible normalization logic belongs here, not in the Worker proxy
+
+==================================================
+4. package.json ROLE
+==================================================
+
+package.json records the current Render sender runtime package identity.
+
+Current observed role:
+- package name: ai-dental-clinic-single-render-mcp
+- main: mcp_sender_single_render_v1.js
+- start script launches mcp_sender_single_render_v1.js
+
+Interpretation:
+- package.json fixes the current executable entry identity for the single Render sender implementation reference
+
+==================================================
+5. IMPLEMENTATION BOUNDARY RULE
+==================================================
+
+Implementation reference artifacts are not the same thing as governing operational protocol.
+
+Operational protocol source:
+- AI_Dental_Clinic_MCP_Sender_v2_Operational_Protocol.txt
+
+Runtime identity source:
+- AI_Dental_Clinic_MCP_Sender_v2_Runtime_Record.txt
+
+Implementation artifacts:
+- proxy-worker.js
+- mcp_sender_single_render_v1.js
+- package.json
+
+Meaning:
+- behavior rules belong in the operational protocol source
+- endpoint identity belongs in the runtime record
+- code realization belongs in the implementation artifacts
+
+==================================================
+6. DRIFT PREVENTION RULE
+==================================================
+
+Execution rooms must not treat local code edits as official baseline merely because code changed in a build/test context.
+
+If code changes alter:
+- public endpoint identity
+- sender interaction behavior
+- preview flow
+- resend logic
+- success interpretation
+- hard-stop semantics
+
+then source review through SAG is required.
+
+==================================================
+7. EDIT AUTHORITY LOCK
+==================================================
+
+This implementation reference source is revised only through SAG.
+Code artifacts themselves may be updated in authorized prototype/build rooms, but official source synchronization still requires SAG review.
+
+END OF DOCUMENT

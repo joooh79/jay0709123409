@@ -1,0 +1,349 @@
+AI DENTAL CLINIC — MCP SENDER v2 OPERATIONAL PROTOCOL
+FINAL
+
+STATUS
+- subordinate operational protocol source
+- primary sender execution baseline after the MCP sender transition
+- governs MCP Sender v2 execution choreography and sender-stage interaction behavior
+- operates under:
+  - AI_Dental_Clinic_Foundation_Canon.txt
+  - AI_Dental_Clinic_Document_Hierarchy_Definition.txt
+  - AI_Dental_Clinic_Project_Source_Registry_Canon.txt
+  - AI_Dental_Clinic_System_Architecture_and_Governance_SAG.txt
+  - AI_Dental_Clinic_Automation_Master_System.txt
+  - AI_Dental_Clinic_Automation_Master_Prompt.txt
+
+ROLE
+This document governs the primary operational baseline of MCP Sender v2.
+
+It defines:
+- sender execution order
+- preview-first behavior
+- sender-stage user interaction rules
+- resend behavior
+- correction / recheck / hard-stop behavior
+- accepted_no_json interpretation under the current Make architecture
+- ChatGPT sender-stage compliance behavior
+
+This document does not:
+- redefine canonical JSON contract
+- replace the Automation Master System
+- replace the Automation Master Prompt
+- revise Foundation
+- authorize Make redesign
+- authorize Airtable schema redesign
+
+==================================================
+1. PURPOSE
+==================================================
+
+The purpose of this protocol is to preserve the validated operational behavior of MCP Sender v2 as an explicit source rather than leaving it in:
+- code only
+- room memory
+- operator habit
+- ad hoc execution practice
+
+This protocol exists to reduce drift and preserve stable sender behavior.
+
+==================================================
+2. PRIMARY BASELINE RULE
+==================================================
+
+MCP Sender v2 is the primary sender execution baseline for normal operation.
+
+Interpretation:
+- sender-stage normal flow should follow this protocol
+- sender interaction behavior should follow this protocol
+- sender resend behavior should follow this protocol
+- sender success / correction / hard-stop interpretation should follow this protocol
+
+Legacy note:
+- AI_Dental_Clinic_JSON_Sender.html may remain as a legacy/manual fallback artifact
+- it is not the preferred primary execution baseline after the MCP sender transition
+
+==================================================
+2A. RUNTIME AND IMPLEMENTATION REFERENCE RULE
+==================================================
+
+Active runtime identity for MCP Sender v2 is recorded in:
+- AI_Dental_Clinic_MCP_Sender_v2_Runtime_Record.txt
+
+Implementation artifact identity for MCP Sender v2 is recorded in:
+- AI_Dental_Clinic_MCP_Sender_v2_Implementation_Reference.txt
+
+Interpretation:
+- this protocol governs sender behavior
+- runtime record governs active public endpoint / deployment identity
+- implementation reference governs code-artifact identity
+- these layers must not be collapsed into one document
+
+==================================================
+3. PREVIEW-FIRST EXECUTION RULE
+==================================================
+
+Normal MCP Sender v2 operation must follow this order:
+
+1. canonical payload prepared
+2. sender_transform
+3. user-visible preview
+4. user confirmation
+5. sender_send
+
+Direct send-first operation must not be treated as the normal operational path.
+
+==================================================
+4. TRANSFORM-BEFORE-SEND RULE
+==================================================
+
+Normal operation must not bypass transform and preview.
+
+Preview is not an optional internal debug layer.
+Preview is part of the actual user-facing execution flow.
+
+==================================================
+5. PREVIEW VISIBILITY RULE
+==================================================
+
+Preview must be shown to the user before final send.
+
+Preview must represent the transformed sender payload, not merely the original input intent.
+
+==================================================
+6. PREVIEW FIELD RULE
+==================================================
+
+Preview should include at minimum:
+
+- patient_id
+- patient_status_claim
+- visit_intent_claim
+- claim_label
+- visit_id
+- visit_date
+- visit_type
+- chief_complaint
+- pain_level
+- findings summary
+
+==================================================
+7. CLAIM VISIBILITY RULE
+==================================================
+
+Preview should explicitly surface:
+- patient_status_claim
+- visit_intent_claim
+- a human-readable combined claim meaning
+
+Examples:
+- existing_patient + new_visit → 구(이미 등록된) 환자 신규 방문 기록
+- existing_patient + existing_visit_update → 구(이미 등록된) 환자 기존 방문 업데이트
+- new_patient + new_visit → 신규 환자 신규 방문 기록
+
+The purpose of this rule is to reduce hidden sender interpretation.
+
+==================================================
+8. NUMERIC-CHOICE INTERACTION RULE
+==================================================
+
+Numeric-choice interaction should be used only where sender branching requires an explicit user decision.
+
+Validated sender-stage numeric-choice routes are:
+- preview confirmation
+- same-date safety interaction
+
+Numeric-choice branching should not be introduced where the sender contract does not require it.
+
+==================================================
+9. PREVIEW CONFIRMATION RULE
+==================================================
+
+Preview confirmation should remain:
+
+1. 이대로 전송
+2. 수정 후 다시 preview
+3. 취소
+
+Meaning:
+- 1 → send current transformed payload
+- 2 → revise and preview again
+- 3 → stop without send
+
+==================================================
+10. SAME-DATE SAFETY RULE
+==================================================
+
+If same-date existing visit is detected, sender must surface correction-required state explicitly.
+
+Validated user-facing choices are:
+
+1. 기존 기록에 이어서 수정/추가로 진행
+2. 새 방문으로 유지하고 그대로 진행
+
+Important interpretation:
+- option 2 is not cancel
+- option 2 means preserve the current claim and let Make continue evaluating that path
+
+Sender must not silently override same-date business logic.
+
+==================================================
+11. SAME-DATE RESEND PATCH RULE
+==================================================
+
+If the user selects the update path after same-date detection:
+
+- clinical content must be preserved
+- only correction-relevant workflow fields should be patched
+- sender must not silently invent new clinical changes
+
+==================================================
+12. PATIENT RECHECK RULE
+==================================================
+
+Patient recheck must follow the validated sender rule:
+
+- no cancel branch
+- no numeric recheck menu
+- corrected 6-digit patient_id only
+
+Validated interaction wording:
+수정된 6자리 patient_id만 다시 입력해 주세요.
+
+==================================================
+13. PATIENT RECHECK RESEND RULE
+==================================================
+
+On patient recheck resend:
+
+- previous payload is preserved
+- patient_id is replaced
+- workflow.patient_recheck_attempted = true must be set
+- visit-bound regenerated identifiers may be updated as required for consistency
+
+The user should not be asked again for:
+- visit date
+- chief complaint
+- findings
+- full JSON
+- full briefing
+
+==================================================
+14. PATIENT RECHECK SECOND-FAIL HARD-STOP RULE
+==================================================
+
+If corrected patient_id also fails:
+
+- sender must surface hard stop
+- sender must not continue indefinite retry loops
+- manual confirmation or manual intervention is required beyond this point
+
+==================================================
+15. HARD-STOP TERMINAL RULE
+==================================================
+
+When sender reaches a validated hard-stop route:
+
+- terminal stop behavior must be enforced
+- sender must not behave as if retry remains normally available
+- user-visible messaging must reflect terminal stop meaning accurately
+
+==================================================
+16. ACCEPTED_NO_JSON INTERPRETATION RULE
+==================================================
+
+Under the current Make write-path architecture, the normal write path does not include a webhook response module for structured success JSON.
+
+Therefore:
+- sender may receive "Accepted" without structured JSON
+- sender may internally classify this as accepted_no_json
+- this should not be treated as failure by default
+
+Under the current validated architecture, accepted_no_json is a normal success shape for the normal write path when Make execution and Airtable write are otherwise consistent.
+
+==================================================
+17. USER-FACING SUCCESS INTERPRETATION RULE
+==================================================
+
+For the normal write path under the current architecture, user-visible success handling may correctly state:
+
+정상적으로 기록을 생성하였습니다.
+
+Internal result typing may remain accepted_no_json, but user-visible behavior should reflect actual success when the validated success conditions are satisfied.
+
+==================================================
+18. MAKE-SUCCESS VERIFICATION RULE
+==================================================
+
+For the current write path, the most accurate success confirmation may come from the combined reading of:
+
+- sender accepted response consistent with current architecture
+- Make execution success
+- Airtable record creation
+
+Structured success JSON is required for some debug / branch routes, but it is not required for normal write-path success under the current validated design.
+
+==================================================
+19. CHATGPT EXECUTION COMPLIANCE RULE
+==================================================
+
+When operating through MCP Sender v2, ChatGPT must follow sender contract rather than improvising alternate routing.
+
+ChatGPT must:
+- use transform before send in normal flow
+- show preview before send
+- use numeric confirmation where sender defines numeric choice
+- request only corrected patient_id in patient recheck route
+- preserve sender branch meaning
+- preserve sender resend logic
+- preserve hard-stop terminal meaning
+
+ChatGPT must not:
+- skip preview in normal flow
+- reinterpret same-date option 2 as cancel
+- create cancel branching in patient recheck
+- ask unrelated fields during patient recheck
+- hide correction-required state
+- ask for full JSON or full briefing again when sender contract forbids that
+
+==================================================
+20. WORDING INTEGRITY RULE
+==================================================
+
+User-facing wording must match the real route meaning.
+
+Examples:
+- same-date option 2 means keep-claim-and-proceed, not cancel
+- patient recheck directly asks for corrected patient_id
+- accepted write path should be shown as successful record creation, not ambiguous technical failure, when the validated success conditions are satisfied
+
+==================================================
+21. RELATION TO HIGHER SOURCES
+==================================================
+
+This protocol does not replace:
+- Automation Master System
+- Automation Master Prompt
+
+Authority relationship:
+- Master System defines automation architecture and locked rule structure
+- Master Prompt defines canonical JSON generation behavior
+- AI_Dental_Clinic_MCP_Sender_v2_Runtime_Record.txt defines active public runtime identity
+- AI_Dental_Clinic_MCP_Sender_v2_Implementation_Reference.txt defines implementation artifact identity
+- this protocol defines sender-stage operational behavior after execution proceeds into MCP sender flow
+
+If this document conflicts with a higher source:
+- the higher source wins
+- source revision must be proposed to SAG
+
+==================================================
+22. EDIT AUTHORITY LOCK
+==================================================
+
+This source is revised only through SAG.
+
+Execution rooms:
+- may validate behavior
+- may report anomalies
+- may propose improvements
+- must not revise this source directly
+
+END OF DOCUMENT

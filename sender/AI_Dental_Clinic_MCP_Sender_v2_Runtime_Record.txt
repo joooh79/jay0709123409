@@ -1,0 +1,130 @@
+AI DENTAL CLINIC — MCP SENDER v2 RUNTIME RECORD
+FINAL
+
+STATUS
+- subordinate runtime/deployment reference source
+- records the active MCP Sender v2 public runtime identity
+- records the active warm-up proxy endpoint identity and health endpoint
+- records current runtime shape and deployment-facing environment expectations
+- does not replace the MCP Sender v2 operational protocol
+- does not replace code artifacts themselves
+
+ROLE
+This document records the active runtime identity for MCP Sender v2.
+
+It exists so that:
+- the public MCP endpoint is not left in chat memory only
+- the active warm-up proxy endpoint is explicitly fixed in source
+- runtime/deployment troubleshooting does not guess the wrong endpoint
+- connector wiring and environment judgments use a shared reference
+
+==================================================
+1. ACTIVE PUBLIC MCP ENDPOINT
+==================================================
+
+Current public MCP endpoint:
+- https://warmup-proxy-worker.jay0709.workers.dev/
+
+Current public health-style endpoint:
+- https://warmup-proxy-worker.jay0709.workers.dev/proxy-health
+
+Interpretation:
+- ChatGPT custom MCP app should connect to the warm-up proxy public endpoint
+- the public endpoint is the Worker-facing entry surface, not the private upstream identity
+
+==================================================
+2. CURRENT RUNTIME SHAPE
+==================================================
+
+Current preferred runtime shape:
+ChatGPT
+→ warm-up proxy Worker
+→ single Render sender
+→ Make
+
+Interpretation:
+- the Worker is the public wake / readiness absorption layer
+- the Render sender is the upstream sender server layer
+- the runtime shape is public-entry-through-Worker, not direct public entry to the Render sender, unless SAG explicitly changes the baseline
+
+==================================================
+3. PUBLIC VS INTERNAL IDENTITY RULE
+==================================================
+
+Public runtime identity fixed by this source:
+- public MCP endpoint URL
+- public warm-up proxy health endpoint
+- active runtime shape
+
+Not fixed here unless separately released:
+- private upstream Render base URL
+- secrets
+- private deployment credentials
+- provider-side dashboard-only deployment metadata
+
+If the public Worker endpoint changes:
+- this source must be updated through SAG
+- rooms must not silently continue using stale endpoint memory
+
+==================================================
+4. RUNTIME ENTRY RULE
+==================================================
+
+Normal runtime entry should assume:
+- the public entrypoint is the warm-up proxy Worker
+- the Worker handles wake/readiness absorption before proxying upstream
+- rooms should not assume that direct Render entry is the public primary baseline after the warm-up proxy transition
+
+==================================================
+5. RUNTIME HEALTH RULE
+==================================================
+
+The current public readiness endpoint is:
+- /proxy-health on the public Worker URL
+
+Current intended meaning:
+- confirms whether the Worker could wake and reach the upstream sender within configured limits
+- should be used for runtime readiness checking when endpoint-level diagnosis matters
+
+==================================================
+6. ACTIVE ENVIRONMENT EXPECTATION RECORD
+==================================================
+
+Current Worker-side environment keys expected by the active runtime include:
+- UPSTREAM_BASE_URL
+- MAX_WAKE_MS
+- MAX_WAKE_ATTEMPTS
+- INITIAL_RETRY_DELAY_MS
+- HEALTH_PROBE_TIMEOUT_MS
+
+Current Render sender-side environment keys expected by the active runtime include:
+- PORT
+- MAKE_WEBHOOK_URL
+
+This source records key identity only.
+It does not store secret values.
+
+==================================================
+7. RELATION TO OTHER SOURCES
+==================================================
+
+Authority relationship:
+- AI_Dental_Clinic_MCP_Sender_v2_Operational_Protocol.txt
+  → sender behavior / interaction / execution choreography
+- AI_Dental_Clinic_MCP_Sender_v2_Runtime_Record.txt
+  → active runtime identity / public endpoint / deployment-facing reference
+- AI_Dental_Clinic_MCP_Sender_v2_Implementation_Reference.txt
+  → code artifact identity and implementation-layer reference
+
+If this source conflicts with a higher source:
+- the higher source wins
+- runtime revision must be routed through SAG
+
+==================================================
+8. EDIT AUTHORITY LOCK
+==================================================
+
+This source is revised only through SAG.
+Execution rooms may report runtime changes or mismatches, but they must not silently rewrite this source.
+
+END OF DOCUMENT
