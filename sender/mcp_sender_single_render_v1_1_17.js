@@ -2849,7 +2849,6 @@ async function buildPhase1TransformEnvelope(payload, transformResult, phase1Deci
 
   if (stage1InteractiveItems.length > 0 && !sequentialStage1.complete) {
     const stage1Guide = buildPhase1Stage1ChoiceGuide(stage1Preview, sequentialStage1);
-    const stage1UserQuestion = buildPhase1Stage1UserQuestion(stage1Preview, sequentialStage1);
     const stage1RequiredInput = buildPhase1Stage1RequiredInput(stage1Preview, sequentialStage1);
     const currentStage1Item = sequentialStage1.currentItem;
     const isChiefComplaintItem =
@@ -2859,10 +2858,12 @@ async function buildPhase1TransformEnvelope(payload, transformResult, phase1Deci
       '[Stage 1 전체 항목]',
       ...stage1AllItems.map((item) => buildStage1ItemBlock(item))
     ].join('\n\n');
-    const previewBodyMarkdown = stage1FullListBlock;
-    const compactAssistantQuestion = currentStage1Item
+    const stage1CanonicalBody = currentStage1Item
       ? [
-          ...(sequentialStage1.invalidChoice ? ['허용된 번호로 다시 선택해 주세요.', ''] : []),
+          sequentialStage1.invalidChoice
+            ? '기존 방문 업데이트 Stage 1 선택이 유효하지 않았습니다. 현재 항목을 다시 선택해 주세요.'
+            : '기존 방문 업데이트 Stage 1 preview입니다. 전체 항목을 먼저 보여드리고, 현재 선택 항목만 입력받습니다.',
+          '',
           stage1FullListBlock,
           '',
           '[현재 선택 항목]',
@@ -2878,7 +2879,16 @@ async function buildPhase1TransformEnvelope(payload, transformResult, phase1Deci
           '',
           ...(isChiefComplaintItem ? ['1. keep current', '2. add', '3. replace'] : ['1. add', '2. replace'])
         ].join('\n')
-      : stage1UserQuestion;
+      : [
+          '기존 방문 업데이트 Stage 1 preview입니다.',
+          '',
+          stage1FullListBlock
+        ].join('\n');
+    const previewBodyMarkdown = stage1CanonicalBody;
+    const stage1GuideWithFullBody = {
+      ...stage1Guide,
+      user_input_prompt: stage1CanonicalBody
+    };
 
     return {
       ok: true,
@@ -2905,29 +2915,25 @@ async function buildPhase1TransformEnvelope(payload, transformResult, phase1Deci
           invalid_choice: sequentialStage1.invalidChoice === true,
           choice_accepted: sequentialStage1.choiceAccepted === true
         },
-        next_step: stage1Guide
+        next_step: stage1GuideWithFullBody
       },
       interaction: {
         mode: 'ask_user',
         ui_kind: 'preview_confirmation',
-        user_message: sequentialStage1.invalidChoice
-          ? '기존 방문 업데이트 Stage 1 선택이 유효하지 않았습니다. 현재 항목을 다시 선택해 주세요.'
-          : '기존 방문 업데이트 Stage 1 preview입니다. 전체 항목을 먼저 보여드리고, 선택이 필요한 현재 항목만 입력받습니다.',
-        assistant_question: compactAssistantQuestion,
+        user_message: stage1CanonicalBody,
+        assistant_question: stage1CanonicalBody,
         preview_body_markdown: previewBodyMarkdown,
         required_user_input: stage1RequiredInput,
-        next_step: stage1Guide,
+        next_step: stage1GuideWithFullBody,
         do_not_ask: []
       },
       execution_contract: {
         contract_version: '1.0',
         mode: 'await_user_choice',
         must_show_message: true,
-        user_visible_message: sequentialStage1.invalidChoice
-          ? '허용된 숫자로 현재 항목을 다시 선택해 주세요.'
-          : '기존 방문 업데이트 Stage 1 preview입니다. 현재 항목만 순서대로 선택해 주세요.',
+        user_visible_message: stage1CanonicalBody,
         must_ask_user: true,
-        user_question: compactAssistantQuestion,
+        user_question: stage1CanonicalBody,
         accepted_input_type: 'single_number_choice',
         accepted_format: isChiefComplaintItem ? '1_keep_or_2_add_or_3_replace' : '1_add_or_2_replace',
         allowed_input_description: isChiefComplaintItem
@@ -2944,7 +2950,7 @@ async function buildPhase1TransformEnvelope(payload, transformResult, phase1Deci
         ],
         auto_resend_allowed: false,
         stop_after_response: false,
-        next_step: stage1Guide
+        next_step: stage1GuideWithFullBody
       },
       debug: {
         ...transformResult.debug,
