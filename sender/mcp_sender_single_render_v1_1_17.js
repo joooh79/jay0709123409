@@ -381,6 +381,7 @@ function mergeChiefComplaintAdd(before, incoming) {
 
   if (!normalizedBefore) return normalizedIncoming;
   if (!normalizedIncoming) return normalizedBefore;
+  if (normalizedBefore === normalizedIncoming) return normalizedBefore;
   if (!separator) return normalizedIncoming;
 
   return `${normalizedBefore}${separator}${normalizedIncoming}`;
