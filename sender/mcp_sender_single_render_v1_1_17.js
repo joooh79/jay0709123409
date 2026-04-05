@@ -1714,9 +1714,10 @@ function buildPhase1Stage1UserQuestion(stage1Preview, sequentialState) {
     currentItem.key === 'visits.chief_complaint' || currentItem.field === 'chief_complaint';
 
   return [
+    '[현재 선택 항목]',
     prompt || 'Stage 1 항목을 확인해 주세요.',
     `현재 항목: ${itemProgress} ${safeString(currentItem.key || currentItem.field || '')}`,
-    displayOnlyItems.length > 0 ? `선택 불필요 항목 ${displayOnlyItems.length}개는 preview에 함께 표시됩니다.` : '',
+    displayOnlyItems.length > 0 ? `선택 불필요 항목 ${displayOnlyItems.length}개는 아래 전체 항목 목록에 함께 표시됩니다.` : '',
     isChiefComplaintItem
       ? '1=keep, 2=add, 3=replace'
       : '1=add, 2=replace'
@@ -2787,8 +2788,7 @@ async function buildPhase1TransformEnvelope(payload, transformResult, phase1Deci
       item.key === 'visits.chief_complaint' || item.field === 'chief_complaint';
     const lines = [
       `[${item.number}] ${safeString(item.key || item.field || '')}`,
-      `- type: ${item.display_only ? 'display_only' : 'interactive'}`,
-      `- status: ${item.display_only ? '변경 없음 / 선택 불필요' : '선택 필요'}`,
+      `- 상태: ${item.display_only ? '선택 불필요 / 변경 없음' : '선택 필요'}`,
       `- before: ${formatVisibleValue(item.before)}`,
       `- incoming: ${formatVisibleValue(item.incoming)}`
     ];
@@ -2855,13 +2855,19 @@ async function buildPhase1TransformEnvelope(payload, transformResult, phase1Deci
     const isChiefComplaintItem =
       currentStage1Item &&
       (currentStage1Item.key === 'visits.chief_complaint' || currentStage1Item.field === 'chief_complaint');
-    const previewBodyMarkdown = stage1AllItems
-      .map((item) => buildStage1ItemBlock(item))
-      .join('\n\n');
+    const stage1FullListBlock = [
+      '[Stage 1 전체 항목]',
+      ...stage1AllItems.map((item) => buildStage1ItemBlock(item))
+    ].join('\n\n');
+    const previewBodyMarkdown = stage1FullListBlock;
     const compactAssistantQuestion = currentStage1Item
       ? [
           ...(sequentialStage1.invalidChoice ? ['허용된 번호로 다시 선택해 주세요.', ''] : []),
-          `[${currentStage1Item.number}] ${safeString(currentStage1Item.key || currentStage1Item.field || '')}`,
+          stage1FullListBlock,
+          '',
+          '[현재 선택 항목]',
+          `현재 항목: ${sequentialStage1?.cursor + 1 || 1}/${stage1InteractiveItems.length || 1} ${safeString(currentStage1Item.key || currentStage1Item.field || '')}`,
+          `- 상태: 선택 필요`,
           `- before: ${formatVisibleValue(currentStage1Item.before)}`,
           `- incoming: ${formatVisibleValue(currentStage1Item.incoming)}`,
           ...(isChiefComplaintItem
@@ -2869,8 +2875,6 @@ async function buildPhase1TransformEnvelope(payload, transformResult, phase1Deci
             : []),
           `- if add: ${formatVisibleValue(currentStage1Item.after_if_add)}`,
           `- if replace: ${formatVisibleValue(currentStage1Item.after_if_replace)}`,
-          '',
-          stage1UserQuestion,
           '',
           ...(isChiefComplaintItem ? ['1. keep current', '2. add', '3. replace'] : ['1. add', '2. replace'])
         ].join('\n')
