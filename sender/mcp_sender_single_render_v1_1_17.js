@@ -1794,41 +1794,13 @@ function buildPhase1Stage1RequiredInput(stage1Preview, sequentialState) {
 
   const isChiefComplaintItem =
     currentItem.key === 'visits.chief_complaint' || currentItem.field === 'chief_complaint';
-  const choices = isChiefComplaintItem
-    ? [
-        {
-          number: 1,
-          label: 'keep current',
-          value: 'keep_current',
-          arg_patch: buildPhase1Stage1ArgPatch(sequentialState, currentItem, 1)
-        },
-        {
-          number: 2,
-          label: 'add',
-          value: 'add',
-          arg_patch: buildPhase1Stage1ArgPatch(sequentialState, currentItem, 2)
-        },
-        {
-          number: 3,
-          label: 'replace',
-          value: 'replace',
-          arg_patch: buildPhase1Stage1ArgPatch(sequentialState, currentItem, 3)
-        }
-      ]
-    : [
-        {
-          number: 1,
-          label: 'add',
-          value: 'add',
-          arg_patch: buildPhase1Stage1ArgPatch(sequentialState, currentItem, 1)
-        },
-        {
-          number: 2,
-          label: 'replace',
-          value: 'replace',
-          arg_patch: buildPhase1Stage1ArgPatch(sequentialState, currentItem, 2)
-        }
-      ];
+  const argPatchExamples = {
+    input_1: buildPhase1Stage1ArgPatch(sequentialState, currentItem, 1),
+    input_2: buildPhase1Stage1ArgPatch(sequentialState, currentItem, 2),
+    ...(isChiefComplaintItem
+      ? { input_3: buildPhase1Stage1ArgPatch(sequentialState, currentItem, 3) }
+      : {})
+  };
 
   return {
     type: 'single_number_choice',
@@ -1838,8 +1810,16 @@ function buildPhase1Stage1RequiredInput(stage1Preview, sequentialState) {
       ? '1은 keep current, 2는 add, 3은 replace'
       : '1은 add, 2는 replace',
     examples: isChiefComplaintItem ? ['1', '2', '3'] : ['1', '2'],
-    choices,
-    arg_patch_template: buildPhase1Stage1ArgPatch(sequentialState, currentItem, '__USER_INPUT__')
+    current_item_key: currentItem.key || '',
+    arg_patch_template: {
+      phase1_decision: {
+        phase1_multiple_policy_state: deepClone(sequentialState?.policyState || {}),
+        phase1_multiple_policy_cursor: sequentialState?.cursor || 0,
+        phase1_multiple_policy_choice_item_key: currentItem?.key || '',
+        phase1_multiple_policy_choice: '<type single number>'
+      }
+    },
+    arg_patch_examples: argPatchExamples
   };
 }
 
@@ -2310,6 +2290,16 @@ function buildPhase1Stage2ChoiceGuide(decision = {}) {
     accepted_confirmation_values: {
       send_now: [1, '1', 'send_now', true],
       cancel: [2, '2', 'cancel', false]
+    },
+    accepted_input_type: 'single_number_choice',
+    accepted_input_format: '1_send_now_or_2_cancel',
+    allowed_input_description: '1은 진행, 2는 취소',
+    allowed_input_examples: ['1', '2'],
+    arg_patch_template: {
+      phase1_decision: {
+        ...decisionPatch,
+        phase1_full_preview_confirmation: '<type single number>'
+      }
     },
     arg_patch_per_choice: {
       '1': {
@@ -2912,7 +2902,7 @@ async function buildPhase1TransformEnvelope(payload, transformResult, phase1Deci
       },
       interaction: {
         mode: 'ask_user',
-        ui_kind: 'preview_confirmation',
+        ui_kind: 'input',
         user_message: stage1CanonicalBody,
         assistant_question: stage1CanonicalBody,
         preview_body_markdown: previewBodyMarkdown,
@@ -2980,7 +2970,9 @@ async function buildPhase1TransformEnvelope(payload, transformResult, phase1Deci
   const stage2FindingsSummary = (stage2Preview.findings_changes || []).length > 0
     ? (stage2Preview.findings_changes || []).map((change) => buildStage2FindingBlock(change)).join('\n\n')
     : '[finding]\n- none';
-  const stage2AssistantQuestion = [
+  const stage2CanonicalBody = [
+    '기존 방문 업데이트 full preview입니다. 아래 내용을 확인한 뒤 숫자로 선택해 주세요.',
+    '',
     stage2HeaderSummary,
     '',
     stage2FindingsSummary,
@@ -2988,6 +2980,11 @@ async function buildPhase1TransformEnvelope(payload, transformResult, phase1Deci
     '1. 이대로 진행',
     '2. 취소'
   ].join('\n');
+  const stage2Guide = buildPhase1Stage2ChoiceGuide(phase1Decision);
+  const stage2GuideWithFullBody = {
+    ...stage2Guide,
+    user_input_prompt: stage2CanonicalBody
+  };
 	
 	  return {
 	    ok: true,
@@ -3008,32 +3005,34 @@ async function buildPhase1TransformEnvelope(payload, transformResult, phase1Deci
       stage1_preview: stage1Preview,
       stage1_decision: phase1Decision,
       stage2_preview: stage2Preview,
-      next_step: buildPhase1Stage2ChoiceGuide(phase1Decision)
+      next_step: stage2GuideWithFullBody
     },
 	    interaction: {
 	      mode: 'ask_user',
-	      ui_kind: 'preview_confirmation',
-	      user_message: '기존 방문 업데이트 full preview입니다. 아래 내용을 확인한 뒤 숫자로 선택해 주세요.',
-	      assistant_question: stage2AssistantQuestion,
+	      ui_kind: 'input',
+	      user_message: stage2CanonicalBody,
+	      assistant_question: stage2CanonicalBody,
 	      required_user_input: {
 	        type: 'single_number_choice',
 	        field: 'phase1_full_preview_confirmation',
-        choices: [
-          { number: 1, label: '이대로 진행', value: 'send_now', arg_patch: buildPhase1Stage2ChoiceGuide(phase1Decision).arg_patch_per_choice['1'] },
-          { number: 2, label: '취소', value: 'cancel', arg_patch: buildPhase1Stage2ChoiceGuide(phase1Decision).arg_patch_per_choice['2'] }
-        ]
+          format: '1_send_now_or_2_cancel',
+          allowed_input_description: '1은 진행, 2는 취소',
+          examples: ['1', '2'],
+          arg_patch_template: stage2Guide.arg_patch_template,
+          arg_patch_examples: stage2Guide.arg_patch_per_choice,
+          confirmation_value_for_each_choice: stage2Guide.confirmation_value_for_each_choice
       },
       ui_display_rules: buildNoOpDisplayRules(),
-      next_step: buildPhase1Stage2ChoiceGuide(phase1Decision),
+      next_step: stage2GuideWithFullBody,
       do_not_ask: []
     },
 	    execution_contract: {
 	      contract_version: '1.0',
 	      mode: 'await_user_choice',
 	      must_show_message: true,
-	      user_visible_message: '기존 방문 업데이트 full preview입니다. 아래 내용을 확인한 뒤 숫자로 선택해 주세요.',
+	      user_visible_message: stage2CanonicalBody,
 	      must_ask_user: true,
-	      user_question: stage2AssistantQuestion,
+	      user_question: stage2CanonicalBody,
 	      accepted_input_type: 'single_number_choice',
       allowed_numbers: [1, 2],
       number_meanings: {
@@ -3051,7 +3050,7 @@ async function buildPhase1TransformEnvelope(payload, transformResult, phase1Deci
       ],
       auto_resend_allowed: false,
       stop_after_response: false,
-      next_step: buildPhase1Stage2ChoiceGuide(phase1Decision)
+      next_step: stage2GuideWithFullBody
     },
     debug: {
       ...transformResult.debug,
