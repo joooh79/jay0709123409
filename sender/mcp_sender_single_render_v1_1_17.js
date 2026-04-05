@@ -322,9 +322,18 @@ function hasPhase1SymptomTouch(payload) {
   });
 }
 
+function hasAnyFindingsTouch(payload) {
+  const records = Array.isArray(payload?.findings_records) ? payload.findings_records : [];
+
+  return records.some((record) => {
+    const fields = record?.fields || {};
+    return Object.keys(fields).some((key) => !['Record name', 'Visit ID', 'Tooth number'].includes(key));
+  });
+}
+
 function isPhase1ApplicableExistingVisitUpdate(payload) {
   if (!isExistingVisitUpdatePayload(payload)) return false;
-  return hasPhase1HeaderTouch(payload) || hasPhase1SymptomTouch(payload);
+  return hasPhase1HeaderTouch(payload) || hasAnyFindingsTouch(payload);
 }
 
 function normalizeStringArray(value) {
@@ -621,28 +630,124 @@ function getRecordsArray(body) {
   return [];
 }
 
-function getPreOpChildIds(childrenBody) {
-  const direct = childrenBody?.child_link_summary?.pre_op_clinical_findings;
+function getPhase2BranchMeta(branchKeyOrCode) {
+  const normalized = safeString(branchKeyOrCode);
+  const byKey = {
+    pre_op: {
+      branch_key: 'pre_op',
+      branch_code: 'PRE',
+      registry_section: 'Pre-op Clinical Findings',
+      child_summary_key: 'pre_op_clinical_findings',
+      table_alias: 'pre_op'
+    },
+    radiographic: {
+      branch_key: 'radiographic',
+      branch_code: 'RAD',
+      registry_section: 'Radiographic Findings',
+      child_summary_key: 'radiographic_findings',
+      table_alias: 'radiographic'
+    },
+    operative: {
+      branch_key: 'operative',
+      branch_code: 'OP',
+      registry_section: 'Operative Findings',
+      child_summary_key: 'operative_findings',
+      table_alias: 'operative'
+    },
+    diagnosis: {
+      branch_key: 'diagnosis',
+      branch_code: 'DX',
+      registry_section: 'Diagnosis',
+      child_summary_key: 'diagnosis',
+      table_alias: 'diagnosis'
+    },
+    treatment_plan: {
+      branch_key: 'treatment_plan',
+      branch_code: 'PLAN',
+      registry_section: 'Treatment Plan',
+      child_summary_key: 'treatment_plan',
+      table_alias: 'treatment_plan'
+    },
+    doctor_reasoning: {
+      branch_key: 'doctor_reasoning',
+      branch_code: 'DR',
+      registry_section: 'Doctor Reasoning',
+      child_summary_key: 'doctor_reasoning',
+      table_alias: 'doctor_reasoning'
+    }
+  };
+  const byCode = {
+    PRE: byKey.pre_op,
+    RAD: byKey.radiographic,
+    OP: byKey.operative,
+    DX: byKey.diagnosis,
+    PLAN: byKey.treatment_plan,
+    DR: byKey.doctor_reasoning
+  };
+
+  return byKey[normalized] || byCode[normalized] || null;
+}
+
+function getPhase2RegistryFieldRule(registryRules, branchKeyOrCode, fieldName) {
+  const branchMeta = getPhase2BranchMeta(branchKeyOrCode);
+  if (!branchMeta?.registry_section || !fieldName) return null;
+  const sectionRules = registryRules?.[branchMeta.registry_section];
+  if (!sectionRules || typeof sectionRules !== 'object') return null;
+  return sectionRules[fieldName] || null;
+}
+
+function isStage1PolicyField(branchKeyOrCode, fieldName, registryRules) {
+  if (safeString(branchKeyOrCode) === 'visits' && fieldName === 'chief_complaint') {
+    return true;
+  }
+
+  const fieldRule = getPhase2RegistryFieldRule(registryRules, branchKeyOrCode, fieldName);
+  return safeString(fieldRule?.type) === 'multi_select';
+}
+
+function getStage1DefaultPolicy(branchKeyOrCode, fieldName) {
+  const normalizedBranchKey = safeString(branchKeyOrCode);
+  if (normalizedBranchKey === 'visits' && fieldName === 'chief_complaint') {
+    return 'replace';
+  }
+  if (normalizedBranchKey === 'pre_op' && fieldName === 'Symptom') {
+    return 'add';
+  }
+  return 'replace';
+}
+
+function getChildIdsBySummaryKey(childrenBody, childSummaryKey) {
+  if (!childSummaryKey) return [];
+
+  const direct = childrenBody?.child_link_summary?.[childSummaryKey];
   if (Array.isArray(direct)) return direct.map((v) => safeString(v)).filter(Boolean);
 
-  const nested = childrenBody?.result?.child_link_summary?.pre_op_clinical_findings;
+  const nested = childrenBody?.result?.child_link_summary?.[childSummaryKey];
   if (Array.isArray(nested)) return nested.map((v) => safeString(v)).filter(Boolean);
 
-  const alt1 = childrenBody?.pre_op_clinical_findings;
+  const alt1 = childrenBody?.[childSummaryKey];
   if (Array.isArray(alt1)) return alt1.map((v) => safeString(v)).filter(Boolean);
 
-  const alt2 = childrenBody?.result?.pre_op_clinical_findings;
+  const alt2 = childrenBody?.result?.[childSummaryKey];
   if (Array.isArray(alt2)) return alt2.map((v) => safeString(v)).filter(Boolean);
 
   return [];
 }
 
-function makePreOpLookupKey(toothNumber, recordName) {
-  return `${safeString(toothNumber)}::${safeString(recordName)}`;
+function getPreOpChildIds(childrenBody) {
+  return getChildIdsBySummaryKey(childrenBody, 'pre_op_clinical_findings');
 }
 
-function findPreOpSnapshotMatch(preOpEntries, toothNumber, recordName) {
-  const entries = Array.isArray(preOpEntries) ? preOpEntries : [];
+function makeFindingLookupKey(branchKey, toothNumber, recordName) {
+  return `${safeString(branchKey)}::${safeString(toothNumber)}::${safeString(recordName)}`;
+}
+
+function makePreOpLookupKey(toothNumber, recordName) {
+  return makeFindingLookupKey('pre_op', toothNumber, recordName);
+}
+
+function findFindingSnapshotMatch(recordEntries, toothNumber, recordName) {
+  const entries = Array.isArray(recordEntries) ? recordEntries : [];
   const normalizedTooth = safeString(toothNumber);
   const normalizedRecordName = safeString(recordName);
 
@@ -685,6 +790,27 @@ function findPreOpSnapshotMatch(preOpEntries, toothNumber, recordName) {
   };
 }
 
+function findPreOpSnapshotMatch(preOpEntries, toothNumber, recordName) {
+  return findFindingSnapshotMatch(preOpEntries, toothNumber, recordName);
+}
+
+function createEmptyFindingBranchState() {
+  return {
+    byTooth: {},
+    byLookup: {}
+  };
+}
+
+function getCurrentStateBranchStore(currentState, branchKey) {
+  if (!currentState || !branchKey) {
+    return createEmptyFindingBranchState();
+  }
+
+  currentState.findingRecordsByBranch ||= {};
+  currentState.findingRecordsByBranch[branchKey] ||= createEmptyFindingBranchState();
+  return currentState.findingRecordsByBranch[branchKey];
+}
+
 
 function hasAnyPreOpFindingsTouch(transformedPayload) {
   const findings = Array.isArray(transformedPayload?.findings_records)
@@ -708,7 +834,16 @@ async function buildExistingVisitUpdateCurrentState(transformedPayload) {
   const patientId = safeString(transformedPayload?.patients?.patient_id);
   const visitDate = safeString(transformedPayload?.visits?.date);
   const symptomTouched = hasSymptomTouch(transformedPayload);
-  const needPreOpRecords = symptomTouched || hasAnyPreOpFindingsTouch(transformedPayload);
+  const findings = Array.isArray(transformedPayload?.findings_records)
+    ? transformedPayload.findings_records
+    : [];
+  const touchedFindingRecords = findings.filter((record) => {
+    const branchMeta = getPhase2BranchMeta(record?.branch_key || record?.branch_code);
+    if (!branchMeta?.branch_key) return false;
+    const fields = record?.fields || {};
+    return Object.keys(fields).some((key) => !['Record name', 'Visit ID', 'Tooth number'].includes(key));
+  });
+  const needFindingRecords = touchedFindingRecords.length > 0;
 
   let patientResp = null;
   if (patientId) {
@@ -735,7 +870,8 @@ async function buildExistingVisitUpdateCurrentState(transformedPayload) {
       visitChildrenBody: {},
       patientBody: patientResp.body || {},
       preOpRecordsByTooth: {},
-      preOpRecordsByLookup: {}
+      preOpRecordsByLookup: {},
+      findingRecordsByBranch: {}
     };
   }
 
@@ -758,7 +894,8 @@ async function buildExistingVisitUpdateCurrentState(transformedPayload) {
       visitChildrenBody: {},
       patientBody: patientResp && patientResp.ok ? patientResp.body : {},
       preOpRecordsByTooth: {},
-      preOpRecordsByLookup: {}
+      preOpRecordsByLookup: {},
+      findingRecordsByBranch: {}
     };
   }
 
@@ -779,7 +916,8 @@ async function buildExistingVisitUpdateCurrentState(transformedPayload) {
       visitChildrenBody: {},
       patientBody: patientResp && patientResp.ok ? patientResp.body : {},
       preOpRecordsByTooth: {},
-      preOpRecordsByLookup: {}
+      preOpRecordsByLookup: {},
+      findingRecordsByBranch: {}
     };
   }
 
@@ -793,10 +931,11 @@ async function buildExistingVisitUpdateCurrentState(transformedPayload) {
     visitBody: visitResp.body,
     visitChildrenBody: {},
     preOpRecordsByTooth: {},
-    preOpRecordsByLookup: {}
+    preOpRecordsByLookup: {},
+    findingRecordsByBranch: {}
   };
 
-  if (!needPreOpRecords) {
+  if (!needFindingRecords) {
     return state;
   }
 
@@ -819,41 +958,74 @@ async function buildExistingVisitUpdateCurrentState(transformedPayload) {
 
   state.visitChildrenBody = childrenResp.body;
 
-  const allPreOpIds = getPreOpChildIds(childrenResp.body);
-  const fetchedPreOpEntries = [];
+  const fetchedEntriesByBranch = {};
+  const touchedBranchKeys = [...new Set(
+    touchedFindingRecords
+      .map((record) => getPhase2BranchMeta(record?.branch_key || record?.branch_code)?.branch_key || '')
+      .filter(Boolean)
+  )];
 
-  for (const childRecordId of allPreOpIds) {
-    const recordResp = await fetchRecord('pre_op', childRecordId);
-    if (!recordResp.ok) {
-      continue;
+  for (const branchKey of touchedBranchKeys) {
+    const branchMeta = getPhase2BranchMeta(branchKey);
+    if (!branchMeta?.child_summary_key || !branchMeta?.table_alias) continue;
+
+    const childIds = getChildIdsBySummaryKey(childrenResp.body, branchMeta.child_summary_key);
+    const fetchedEntries = [];
+
+    for (const childRecordId of childIds) {
+      const recordResp = await fetchRecord(branchMeta.table_alias, childRecordId);
+      if (!recordResp.ok) {
+        continue;
+      }
+      fetchedEntries.push({
+        recordId: childRecordId,
+        body: recordResp.body
+      });
     }
-    fetchedPreOpEntries.push({
-      recordId: childRecordId,
-      body: recordResp.body
-    });
+
+    fetchedEntriesByBranch[branchKey] = fetchedEntries;
   }
 
-  const findings = Array.isArray(transformedPayload?.findings_records)
-    ? transformedPayload.findings_records
-    : [];
+  for (const record of touchedFindingRecords) {
+    const branchMeta = getPhase2BranchMeta(record?.branch_key || record?.branch_code);
+    if (!branchMeta?.branch_key) continue;
 
-  for (const record of findings) {
-    if (safeString(record?.branch_key) !== 'pre_op') continue;
-
+    const branchKey = branchMeta.branch_key;
+    const branchStore = getCurrentStateBranchStore(state, branchKey);
     const toothNumber = safeString(record?.tooth_number);
     const recordName = safeString(record?.record_name);
-    const childLookup = findPreOpSnapshotMatch(fetchedPreOpEntries, toothNumber, recordName);
+    const childLookup = findFindingSnapshotMatch(
+      fetchedEntriesByBranch[branchKey] || [],
+      toothNumber,
+      recordName
+    );
     const childRecordId = childLookup.id;
 
     if (!childRecordId) {
-      if (record?.fields?.Symptom !== undefined || record?.fields?.['Visible crack'] !== undefined) {
-        state.preOpRecordsByLookup[makePreOpLookupKey(toothNumber, recordName)] = {
-          recordId: '',
-          requestedRecordName: recordName,
-          matchedRecordName: '',
-          row_resolution: 'unresolved',
-          body: null
-        };
+      const unresolvedEntry = {
+        recordId: '',
+        requestedRecordName: recordName,
+        matchedRecordName: '',
+        row_resolution: 'unresolved',
+        body: null
+      };
+
+      branchStore.byLookup[makeFindingLookupKey(branchKey, toothNumber, recordName)] = unresolvedEntry;
+      if (
+        !branchStore.byTooth[toothNumber] ||
+        branchStore.byTooth[toothNumber].row_resolution !== 'matched_existing_row'
+      ) {
+        branchStore.byTooth[toothNumber] = unresolvedEntry;
+      }
+
+      if (branchKey === 'pre_op') {
+        state.preOpRecordsByLookup[makePreOpLookupKey(toothNumber, recordName)] = unresolvedEntry;
+        if (
+          !state.preOpRecordsByTooth[toothNumber] ||
+          state.preOpRecordsByTooth[toothNumber].row_resolution !== 'matched_existing_row'
+        ) {
+          state.preOpRecordsByTooth[toothNumber] = unresolvedEntry;
+        }
       }
       continue;
     }
@@ -866,13 +1038,22 @@ async function buildExistingVisitUpdateCurrentState(transformedPayload) {
       body: childLookup.body
     };
 
-    state.preOpRecordsByLookup[makePreOpLookupKey(toothNumber, recordName)] = entry;
-
+    branchStore.byLookup[makeFindingLookupKey(branchKey, toothNumber, recordName)] = entry;
     if (
-      !state.preOpRecordsByTooth[toothNumber] ||
-      state.preOpRecordsByTooth[toothNumber].row_resolution !== 'matched_existing_row'
+      !branchStore.byTooth[toothNumber] ||
+      branchStore.byTooth[toothNumber].row_resolution !== 'matched_existing_row'
     ) {
-      state.preOpRecordsByTooth[toothNumber] = entry;
+      branchStore.byTooth[toothNumber] = entry;
+    }
+
+    if (branchKey === 'pre_op') {
+      state.preOpRecordsByLookup[makePreOpLookupKey(toothNumber, recordName)] = entry;
+      if (
+        !state.preOpRecordsByTooth[toothNumber] ||
+        state.preOpRecordsByTooth[toothNumber].row_resolution !== 'matched_existing_row'
+      ) {
+        state.preOpRecordsByTooth[toothNumber] = entry;
+      }
     }
   }
 
@@ -904,11 +1085,17 @@ function detectFindingsTouchedFields(transformedPayload) {
     : [];
 
   const result = {
-    pre_op: {}
+    pre_op: {},
+    radiographic: {},
+    operative: {},
+    diagnosis: {},
+    treatment_plan: {},
+    doctor_reasoning: {}
   };
 
   for (const record of findings) {
-    if (safeString(record?.branch_key) !== 'pre_op') continue;
+    const branchMeta = getPhase2BranchMeta(record?.branch_key || record?.branch_code);
+    if (!branchMeta?.branch_key) continue;
 
     const toothNumber = safeString(record?.tooth_number);
     const recordName = safeString(record?.record_name);
@@ -923,7 +1110,7 @@ function detectFindingsTouchedFields(transformedPayload) {
 
     if (touchedFields.length === 0) continue;
 
-    result.pre_op[toothNumber] = {
+    result[branchMeta.branch_key][toothNumber] = {
       record_name: recordName,
       touchedFields
     };
@@ -936,7 +1123,7 @@ function resolveUpdateScope(headerTouched, findingsTouched) {
   const hasHeader =
     Object.values(headerTouched.patients || {}).some(Boolean) ||
     Object.values(headerTouched.visits || {}).some(Boolean);
-  const hasFindings = Object.keys(findingsTouched.pre_op || {}).length > 0;
+  const hasFindings = Object.values(findingsTouched || {}).some((branchTouched) => Object.keys(branchTouched || {}).length > 0);
 
   if (hasHeader && hasFindings) return 'mixed';
   if (hasHeader) return 'header_only';
@@ -944,114 +1131,285 @@ function resolveUpdateScope(headerTouched, findingsTouched) {
   return 'findings_only';
 }
 
-function getStoredPreOpEntry(currentState, toothNumber, recordName = '') {
-  const exact = currentState?.preOpRecordsByLookup?.[makePreOpLookupKey(toothNumber, recordName)];
+function getStoredFindingEntry(currentState, branchKey, toothNumber, recordName = '') {
+  if (safeString(branchKey) === 'pre_op') {
+    const exact = currentState?.preOpRecordsByLookup?.[makePreOpLookupKey(toothNumber, recordName)];
+    if (exact) return exact;
+    return currentState?.preOpRecordsByTooth?.[safeString(toothNumber)] || null;
+  }
+
+  const branchStore = currentState?.findingRecordsByBranch?.[safeString(branchKey)];
+  const exact = branchStore?.byLookup?.[makeFindingLookupKey(branchKey, toothNumber, recordName)];
   if (exact) return exact;
-  return currentState?.preOpRecordsByTooth?.[safeString(toothNumber)] || null;
+  return branchStore?.byTooth?.[safeString(toothNumber)] || null;
 }
 
-function getStoredPreOpField(currentState, toothNumber, fieldName, recordName = '') {
-  const entry = getStoredPreOpEntry(currentState, toothNumber, recordName);
+function getStoredFindingField(currentState, branchKey, toothNumber, fieldName, recordName = '') {
+  const entry = getStoredFindingEntry(currentState, branchKey, toothNumber, recordName);
   const fields = getRecordFields(entry?.body);
   return fields[fieldName];
 }
 
-function getStoredPreOpRowResolution(currentState, toothNumber, recordName = '') {
-  const entry = getStoredPreOpEntry(currentState, toothNumber, recordName);
+function getStoredFindingRowResolution(currentState, branchKey, toothNumber, recordName = '') {
+  const entry = getStoredFindingEntry(currentState, branchKey, toothNumber, recordName);
   return entry?.row_resolution || 'unresolved';
 }
 
-function buildPhase1MultiplePreview(transformedPayload, currentState) {
+function getStoredPreOpEntry(currentState, toothNumber, recordName = '') {
+  return getStoredFindingEntry(currentState, 'pre_op', toothNumber, recordName);
+}
+
+function getStoredPreOpField(currentState, toothNumber, fieldName, recordName = '') {
+  return getStoredFindingField(currentState, 'pre_op', toothNumber, fieldName, recordName);
+}
+
+function getStoredPreOpRowResolution(currentState, toothNumber, recordName = '') {
+  return getStoredFindingRowResolution(currentState, 'pre_op', toothNumber, recordName);
+}
+
+function buildStage1ItemKey(branchKey, toothNumber, fieldName, usedKeys, recordName = '') {
+  const baseKey = `${safeString(branchKey)}.${safeString(toothNumber)}.${safeString(fieldName)}`;
+  const candidateKeys = [baseKey];
+  if (recordName) {
+    candidateKeys.push(`${baseKey}::${safeString(recordName)}`);
+  }
+
+  for (const candidate of candidateKeys) {
+    if (!usedKeys.has(candidate)) {
+      usedKeys.add(candidate);
+      return candidate;
+    }
+  }
+
+  let suffix = 2;
+  while (usedKeys.has(`${baseKey}::${suffix}`)) {
+    suffix += 1;
+  }
+  const uniqueKey = `${baseKey}::${suffix}`;
+  usedKeys.add(uniqueKey);
+  return uniqueKey;
+}
+
+function getStage1AllItems(stage1Preview) {
+  if (Array.isArray(stage1Preview?.all_items)) {
+    return stage1Preview.all_items;
+  }
+  if (Array.isArray(stage1Preview?.items)) {
+    return stage1Preview.items;
+  }
+  return [];
+}
+
+function getStage1InteractiveItems(stage1Preview) {
+  if (Array.isArray(stage1Preview?.interactive_items)) {
+    return stage1Preview.interactive_items;
+  }
+  if (Array.isArray(stage1Preview?.items)) {
+    return stage1Preview.items;
+  }
+  return [];
+}
+
+function getStage1DisplayOnlyItems(stage1Preview) {
+  if (Array.isArray(stage1Preview?.display_only_items)) {
+    return stage1Preview.display_only_items;
+  }
+  return [];
+}
+
+function buildPhase1MultiplePreview(transformedPayload, currentState, registryRules) {
   const findings = Array.isArray(transformedPayload?.findings_records)
     ? transformedPayload.findings_records
     : [];
-
-  const items = [];
-
+  const allItems = [];
+  const usedKeys = new Set();
   const visitFields = getRecordFields(currentState?.visitBody || {});
+  const headerTouched = detectHeaderTouchedFields(transformedPayload);
   const incomingChiefComplaint = transformedPayload?.visits?.chief_complaint || '';
   const beforeChiefComplaint = safeString(visitFields['Chief Complaint'] || '');
+  const chiefComplaintTouched = headerTouched?.visits?.chief_complaint === true;
 
-  if (beforeChiefComplaint && incomingChiefComplaint) {
+  if (chiefComplaintTouched && incomingChiefComplaint !== '') {
+    const afterIfKeepCurrent = beforeChiefComplaint;
     const afterIfAdd = mergeChiefComplaintAdd(beforeChiefComplaint, incomingChiefComplaint);
     const afterIfReplace = incomingChiefComplaint;
-
-    const policyChoiceChangesOutcome = !valuesEqual(afterIfAdd, afterIfReplace, 'visits', 'chief_complaint');
+    const distinctOutcomeCount = new Set([
+      JSON.stringify(normalizeComparableValue('visits', 'chief_complaint', afterIfKeepCurrent)),
+      JSON.stringify(normalizeComparableValue('visits', 'chief_complaint', afterIfAdd)),
+      JSON.stringify(normalizeComparableValue('visits', 'chief_complaint', afterIfReplace))
+    ]).size;
+    const policyChoiceChangesOutcome = distinctOutcomeCount > 1;
+    const defaultPolicy = getStage1DefaultPolicy('visits', 'chief_complaint');
+    const defaultAfter = defaultPolicy === 'add'
+      ? afterIfAdd
+      : defaultPolicy === 'keep_current'
+        ? afterIfKeepCurrent
+        : afterIfReplace;
+    const informationalNoOp = valuesEqual(
+      beforeChiefComplaint,
+      defaultAfter,
+      'visits',
+      'chief_complaint'
+    );
 
     if (policyChoiceChangesOutcome) {
-      items.push({
-        number: items.length + 1,
+      allItems.push({
         key: 'visits.chief_complaint',
         choice_mode: 'keep_add_replace',
         section: 'visits',
         field: 'chief_complaint',
         before: beforeChiefComplaint,
         incoming: incomingChiefComplaint,
-        default_policy: 'replace',
+        after_if_keep_current: afterIfKeepCurrent,
+        default_policy: defaultPolicy,
         after_if_add: afterIfAdd,
         after_if_replace: afterIfReplace,
         write_target_type: 'visit_header',
-        merge_mode: 'replace'
+        merge_mode: 'replace',
+        display_only: false,
+        requires_selection: true
+      });
+    } else if (informationalNoOp) {
+      allItems.push({
+        key: 'visits.chief_complaint',
+        choice_mode: 'keep_add_replace',
+        section: 'visits',
+        field: 'chief_complaint',
+        before: beforeChiefComplaint,
+        incoming: incomingChiefComplaint,
+        after_if_keep_current: afterIfKeepCurrent,
+        default_policy: defaultPolicy,
+        after_if_add: afterIfAdd,
+        after_if_replace: afterIfReplace,
+        resolved_policy: defaultPolicy,
+        resolved_after: defaultAfter,
+        write_target_type: 'visit_header',
+        merge_mode: 'no_op',
+        display_only: true,
+        requires_selection: false,
+        no_op: true,
+        transparency_only: true,
+        transparency_reason: 'informational_no_op'
       });
     }
   }
 
   for (const record of findings) {
-    if (safeString(record?.branch_key) !== 'pre_op') continue;
-
-    const incomingSymptom = record?.fields?.Symptom;
-    if (incomingSymptom === undefined) continue;
-
+    const branchMeta = getPhase2BranchMeta(record?.branch_key || record?.branch_code);
+    if (!branchMeta?.branch_key || branchMeta.branch_key === 'treatment_plan') continue;
     const toothNumber = safeString(record?.tooth_number);
     const recordName = safeString(record?.record_name);
-    const before = normalizeStringArray(
-      getStoredPreOpField(currentState, toothNumber, 'Symptom', recordName)
-    );
-    const incoming = normalizeStringArray(incomingSymptom);
-    const afterIfAdd = mergeMultiSelectAdd(before, incoming);
-    const afterIfReplace = deepClone(incoming);
-    const rowResolution = getStoredPreOpRowResolution(currentState, toothNumber, recordName);
+    const fields = record?.fields || {};
 
-    const policyChoiceChangesOutcome = !valuesEqual(
-      afterIfAdd,
-      afterIfReplace,
-      'pre_op',
-      'Symptom'
-    );
+    for (const [fieldName, incomingValue] of Object.entries(fields)) {
+      if (fieldName === 'Record name' || fieldName === 'Visit ID' || fieldName === 'Tooth number') {
+        continue;
+      }
 
-    if (!policyChoiceChangesOutcome) {
-      continue;
+      if (!isStage1PolicyField(branchMeta.branch_key, fieldName, registryRules)) {
+        continue;
+      }
+
+      const fieldRule = getPhase2RegistryFieldRule(registryRules, branchMeta.branch_key, fieldName);
+      if (safeString(fieldRule?.type) !== 'multi_select') {
+        continue;
+      }
+
+      const before = normalizeStringArray(
+        getStoredFindingField(currentState, branchMeta.branch_key, toothNumber, fieldName, recordName)
+      );
+      const incoming = normalizeStringArray(incomingValue);
+      const afterIfAdd = mergeMultiSelectAdd(before, incoming);
+      const afterIfReplace = deepClone(incoming);
+      const rowResolution = getStoredFindingRowResolution(currentState, branchMeta.branch_key, toothNumber, recordName);
+      const policyChoiceChangesOutcome = !valuesEqual(
+        afterIfAdd,
+        afterIfReplace,
+        branchMeta.branch_key,
+        fieldName
+      );
+      const defaultPolicy = getStage1DefaultPolicy(branchMeta.branch_key, fieldName);
+      const defaultAfter = defaultPolicy === 'add' ? afterIfAdd : afterIfReplace;
+      const informationalNoOp = valuesEqual(
+        before,
+        defaultAfter,
+        branchMeta.branch_key,
+        fieldName
+      );
+
+      if (!policyChoiceChangesOutcome && !informationalNoOp) {
+        continue;
+      }
+
+      allItems.push({
+        key: buildStage1ItemKey(branchMeta.branch_key, toothNumber, fieldName, usedKeys, recordName),
+        choice_mode: 'add_or_replace',
+        section: branchMeta.registry_section,
+        branch: branchMeta.branch_key,
+        tooth_number: toothNumber,
+        record_name: recordName,
+        field: fieldName,
+        before,
+        incoming,
+        default_policy: defaultPolicy,
+        after_if_add: afterIfAdd,
+        after_if_replace: afterIfReplace,
+        resolved_policy: informationalNoOp && !policyChoiceChangesOutcome ? defaultPolicy : '',
+        resolved_after: informationalNoOp && !policyChoiceChangesOutcome ? defaultAfter : undefined,
+        write_target_type: 'finding_row',
+        row_resolution: rowResolution,
+        merge_mode: informationalNoOp && !policyChoiceChangesOutcome ? 'no_op' : defaultPolicy,
+        current_live_before: before,
+        expected_after_if_add: afterIfAdd,
+        expected_after_if_replace: afterIfReplace,
+        display_only: informationalNoOp && !policyChoiceChangesOutcome,
+        requires_selection: !informationalNoOp && policyChoiceChangesOutcome,
+        no_op: informationalNoOp && !policyChoiceChangesOutcome,
+        transparency_only: informationalNoOp && !policyChoiceChangesOutcome,
+        transparency_reason: informationalNoOp && !policyChoiceChangesOutcome ? 'informational_no_op' : ''
+      });
     }
-
-    items.push({
-      number: items.length + 1,
-      key: `pre_op.${toothNumber}.Symptom`,
-      choice_mode: 'add_or_replace',
-      branch: 'pre_op',
-      tooth_number: toothNumber,
-      record_name: recordName,
-      field: 'Symptom',
-      before,
-      incoming,
-      default_policy: 'add',
-      after_if_add: afterIfAdd,
-      after_if_replace: afterIfReplace,
-      write_target_type: 'finding_row',
-      row_resolution: rowResolution,
-      merge_mode: 'add',
-      current_live_before: before,
-      expected_after_if_add: afterIfAdd,
-      expected_after_if_replace: afterIfReplace
-    });
   }
+
+  const branchOrder = {
+    visits: 0,
+    pre_op: 1,
+    radiographic: 2,
+    operative: 3,
+    diagnosis: 4,
+    doctor_reasoning: 5,
+    treatment_plan: 6
+  };
+
+  allItems.sort((a, b) => {
+    const aBranch = safeString(a.branch || a.section);
+    const bBranch = safeString(b.branch || b.section);
+    const branchDiff = (branchOrder[aBranch] ?? 999) - (branchOrder[bBranch] ?? 999);
+    if (branchDiff !== 0) return branchDiff;
+
+    const toothDiff = safeString(a.tooth_number).localeCompare(safeString(b.tooth_number), undefined, { numeric: true });
+    if (toothDiff !== 0) return toothDiff;
+
+    const fieldDiff = safeString(a.field).localeCompare(safeString(b.field));
+    if (fieldDiff !== 0) return fieldDiff;
+
+    return safeString(a.record_name).localeCompare(safeString(b.record_name));
+  });
+
+  allItems.forEach((item, index) => {
+    item.number = index + 1;
+  });
+
+  const interactiveItems = allItems.filter((item) => item.display_only !== true);
+  const displayOnlyItems = allItems.filter((item) => item.display_only === true);
 
   return {
     stage: 'multiple_policy_preview',
-    items,
-    prompt:
-      items.some((item) => item.key === 'visits.chief_complaint')
-        ? '항목의 default policy를 변경하려면 항목 번호와 정책을 입력하세요. chief_complaint는 "번호 keep/add/replace", 다른 항목은 "번호 add/replace"를 지원합니다. 또는 0 입력하면 모두 기본값 유지'
-        : '항목의 default policy를 변경하려면 항목 번호와 정책을 입력하세요. (예: \"1 add\", \"2 replace\") 또는 0 입력하면 모두 기본값 유지'
+    items: interactiveItems,
+    all_items: allItems,
+    interactive_items: interactiveItems,
+    display_only_items: displayOnlyItems,
+    prompt: 'Stage 1에서 policy-sensitive 항목을 순서대로 확인합니다.'
   };
 }
 
@@ -1065,67 +1423,99 @@ function normalizeChoiceToken(raw) {
   return '';
 }
 
-function parseStage1ChoiceDecision(rawChoice, stage1Preview) {
-  const items = Array.isArray(stage1Preview?.items) ? stage1Preview.items : [];
+function extractExistingPhase1PolicyState(input, stage1Preview) {
+  const items = getStage1InteractiveItems(stage1Preview);
+  const policyState = {};
+
+  if (input && typeof input === 'object' && !Array.isArray(input)) {
+    if (input.phase1_multiple_policy_state && typeof input.phase1_multiple_policy_state === 'object' && !Array.isArray(input.phase1_multiple_policy_state)) {
+      for (const item of items) {
+        const storedPolicy = safeString(input.phase1_multiple_policy_state[item.key]);
+        if (storedPolicy === 'keep_current' || storedPolicy === 'add' || storedPolicy === 'replace') {
+          policyState[item.key] = storedPolicy;
+        }
+      }
+    }
+
+    if (Array.isArray(input.replaceOverrides) || Array.isArray(input.addOverrides) || Array.isArray(input.keepCurrentOverrides)) {
+      const replaceOverrides = new Set((Array.isArray(input.replaceOverrides) ? input.replaceOverrides : []).map((item) => safeString(item).trim()).filter(Boolean));
+      const addOverrides = new Set((Array.isArray(input.addOverrides) ? input.addOverrides : []).map((item) => safeString(item).trim()).filter(Boolean));
+      const keepCurrentOverrides = new Set((Array.isArray(input.keepCurrentOverrides) ? input.keepCurrentOverrides : []).map((item) => safeString(item).trim()).filter(Boolean));
+
+      for (const item of items) {
+        if (policyState[item.key]) continue;
+        if (keepCurrentOverrides.has(item.key)) {
+          policyState[item.key] = 'keep_current';
+        } else if (addOverrides.has(item.key)) {
+          policyState[item.key] = 'add';
+        } else if (replaceOverrides.has(item.key)) {
+          policyState[item.key] = 'replace';
+        }
+      }
+    }
+  }
+
+  return policyState;
+}
+
+function normalizeSequentialStage1Policy(rawChoice, item) {
+  const token = normalizeChoiceToken(rawChoice);
+  if (!token || !item) return '';
+
+  const normalizePolicyWord = (value) => {
+    if (item.choice_mode === 'keep_add_replace') {
+      if (value === '1' || value === 'keep' || value === 'keep_current') return 'keep_current';
+      if (value === '2' || value === 'add') return 'add';
+      if (value === '3' || value === 'replace') return 'replace';
+      return '';
+    }
+
+    if (value === '1' || value === 'add') return 'add';
+    if (value === '2' || value === 'replace') return 'replace';
+    return '';
+  };
+
+  if (!token.includes(' ')) {
+    return normalizePolicyWord(token);
+  }
+
+  const parts = token.split(/\s+/).filter(Boolean);
+  if (parts.length !== 2) return '';
+
+  const [numberPart, policyPart] = parts;
+  if (!/^\d+$/.test(numberPart) || Number(numberPart) !== item.number) {
+    return '';
+  }
+  return normalizePolicyWord(policyPart);
+}
+
+function buildPhase1DecisionFromPolicyState(stage1Preview, policyState, cursor = 0) {
+  const items = getStage1InteractiveItems(stage1Preview);
   const result = {
     replaceOverrides: [],
     addOverrides: [],
-    keepCurrentOverrides: []
+    keepCurrentOverrides: [],
+    policyState: {},
+    phase1_multiple_policy_state: {},
+    phase1_multiple_policy_cursor: cursor
   };
 
-  if (!rawChoice || rawChoice === '' || rawChoice === 0 || rawChoice === '0') {
-    return result;
-  }
+  for (const item of items) {
+    const selectedPolicy = safeString(policyState?.[item.key]);
+    if (!selectedPolicy) continue;
 
-  const token = normalizeChoiceToken(rawChoice);
-  const parts = safeString(token).split(/\s+/);
-  const numberPart = parts[0];
-  const policyPart = parts[1] || '';
+    result.policyState[item.key] = selectedPolicy;
+    result.phase1_multiple_policy_state[item.key] = selectedPolicy;
 
-  if (!/^\d+$/.test(numberPart)) {
-    return result;
-  }
-
-  const number = Number(numberPart);
-  if (number === 0) return result;
-
-  const matched = items.find((item) => item.number === number);
-  if (!matched?.key) return result;
-
-  const choiceMode = safeString(matched.choice_mode || 'add_or_replace');
-  const itemDefaultPolicy = matched.default_policy || 'replace';
-  const requestedPolicy = safeString(policyPart).toLowerCase();
-  const isChiefComplaintItem =
-    matched.key === 'visits.chief_complaint' || matched.field === 'chief_complaint';
-
-  if (!requestedPolicy) {
-    let overrideTo = '';
-
-    if (choiceMode === 'keep_add_replace') {
-      overrideTo = 'add';
-    } else if (choiceMode === 'add_or_replace') {
-      overrideTo = itemDefaultPolicy === 'add' ? 'replace' : 'add';
-    } else {
-      overrideTo = itemDefaultPolicy === 'add' ? 'replace' : 'add';
-    }
-
-    if (overrideTo === 'keep_current') {
-      result.keepCurrentOverrides.push(matched.key);
-    } else if (overrideTo === 'replace') {
-      result.replaceOverrides.push(matched.key);
-    } else {
-      result.addOverrides.push(matched.key);
-    }
-  } else if (choiceMode === 'add_or_replace' || choiceMode === 'keep_add_replace') {
-    if ((requestedPolicy === 'keep' || requestedPolicy === 'keep_current') && isChiefComplaintItem) {
-      result.keepCurrentOverrides.push(matched.key);
-    } else if (requestedPolicy === 'add') {
-      if (itemDefaultPolicy !== 'add') {
-        result.addOverrides.push(matched.key);
+    if (selectedPolicy === 'keep_current') {
+      result.keepCurrentOverrides.push(item.key);
+    } else if (selectedPolicy === 'add') {
+      if (item.default_policy !== 'add') {
+        result.addOverrides.push(item.key);
       }
-    } else if (requestedPolicy === 'replace') {
-      if (itemDefaultPolicy !== 'replace') {
-        result.replaceOverrides.push(matched.key);
+    } else if (selectedPolicy === 'replace') {
+      if (item.default_policy !== 'replace') {
+        result.replaceOverrides.push(item.key);
       }
     }
   }
@@ -1164,48 +1554,75 @@ function extractPhase1Stage1Input(input) {
 }
 
 function parsePhase1Decision(input, stage1Preview) {
-  if (input === undefined || input === null || input === '') {
-    return {
-      replaceOverrides: [],
-      addOverrides: [],
-      keepCurrentOverrides: []
-    };
-  }
+  const sequentialState = buildSequentialStage1PolicyState(input, stage1Preview);
+  return buildPhase1DecisionFromPolicyState(
+    stage1Preview,
+    sequentialState.policyState,
+    sequentialState.cursor
+  );
+}
 
-  if (typeof input === 'string' || typeof input === 'number' || typeof input === 'boolean') {
-    return parseStage1ChoiceDecision(input, stage1Preview);
-  }
+function buildSequentialStage1PolicyState(input, stage1Preview) {
+  const items = getStage1InteractiveItems(stage1Preview);
+  const basePolicyState = extractExistingPhase1PolicyState(input, stage1Preview);
+  const policyState = { ...basePolicyState };
+  const firstUnresolvedIndex = items.findIndex((item) => !policyState[item.key]);
+  let cursor = firstUnresolvedIndex === -1 ? items.length : firstUnresolvedIndex;
 
-  if (input && typeof input === 'object') {
-    if (Array.isArray(input.replaceOverrides) || Array.isArray(input.addOverrides) || Array.isArray(input.keepCurrentOverrides)) {
-      return {
-        replaceOverrides: (Array.isArray(input.replaceOverrides) ? input.replaceOverrides : [])
-          .map((item) => (typeof item === 'string' ? item : ''))
-          .map((item) => item.trim())
-          .filter(Boolean),
-        addOverrides: (Array.isArray(input.addOverrides) ? input.addOverrides : [])
-          .map((item) => (typeof item === 'string' ? item : ''))
-          .map((item) => item.trim())
-          .filter(Boolean),
-        keepCurrentOverrides: (Array.isArray(input.keepCurrentOverrides) ? input.keepCurrentOverrides : [])
-          .map((item) => (typeof item === 'string' ? item : ''))
-          .map((item) => item.trim())
-          .filter(Boolean)
-      };
+  const rawChoice = extractPhase1Stage1Input(input);
+  const currentItem = cursor < items.length ? items[cursor] : null;
+  const choiceItemKey = input && typeof input === 'object'
+    ? safeString(input.phase1_multiple_policy_choice_item_key)
+    : '';
+
+  let appliedPolicy = '';
+  let appliedItemKey = '';
+  let choiceAccepted = false;
+  let invalidChoice = false;
+
+  if (rawChoice !== undefined && currentItem) {
+    if (!choiceItemKey || choiceItemKey === currentItem.key) {
+      appliedPolicy = normalizeSequentialStage1Policy(rawChoice, currentItem);
+      if (appliedPolicy) {
+        policyState[currentItem.key] = appliedPolicy;
+        appliedItemKey = currentItem.key;
+        choiceAccepted = true;
+        cursor += 1;
+        while (cursor < items.length && policyState[items[cursor].key]) {
+          cursor += 1;
+        }
+      } else {
+        invalidChoice = true;
+      }
+    } else {
+      invalidChoice = true;
     }
-
-    const extracted = extractPhase1Stage1Input(input);
-    return parseStage1ChoiceDecision(extracted, stage1Preview);
   }
 
   return {
-    replaceOverrides: [],
-    addOverrides: [],
-    keepCurrentOverrides: []
+    policyState,
+    cursor,
+    currentItem: cursor < items.length ? items[cursor] : null,
+    complete: cursor >= items.length,
+    appliedPolicy,
+    appliedItemKey,
+    choiceAccepted,
+    invalidChoice
   };
 }
 
 function resolveFieldPolicy(changeKey, fieldName, decision) {
+  const policyState =
+    decision?.policyState && typeof decision.policyState === 'object' && !Array.isArray(decision.policyState)
+      ? decision.policyState
+      : decision?.phase1_multiple_policy_state && typeof decision.phase1_multiple_policy_state === 'object' && !Array.isArray(decision.phase1_multiple_policy_state)
+        ? decision.phase1_multiple_policy_state
+        : {};
+  const explicitPolicy = safeString(policyState?.[changeKey]);
+  if (explicitPolicy === 'keep_current' || explicitPolicy === 'add' || explicitPolicy === 'replace') {
+    return explicitPolicy;
+  }
+
   const replaceOverrides = Array.isArray(decision?.replaceOverrides)
     ? decision.replaceOverrides
     : [];
@@ -1216,18 +1633,29 @@ function resolveFieldPolicy(changeKey, fieldName, decision) {
     ? decision.keepCurrentOverrides
     : [];
 
-  if (fieldName === 'Symptom') {
-    return replaceOverrides.includes(changeKey) ? 'replace' : 'add';
-  }
+  const defaultPolicy = getStage1DefaultPolicy(
+    safeString(changeKey).split('.')[0],
+    fieldName
+  );
 
   if (fieldName === 'chief_complaint') {
     if (keepCurrentOverrides.includes(changeKey)) {
       return 'keep_current';
     }
-    return addOverrides.includes(changeKey) ? 'add' : 'replace';
+    if (addOverrides.includes(changeKey)) {
+      return 'add';
+    }
+    return defaultPolicy;
   }
 
-  return 'replace';
+  if (addOverrides.includes(changeKey)) {
+    return 'add';
+  }
+  if (replaceOverrides.includes(changeKey)) {
+    return 'replace';
+  }
+
+  return defaultPolicy;
 }
 
 function normalizeComparableValue(section, field, value) {
@@ -1258,45 +1686,97 @@ function valuesEqual(a, b, section = '', field = '') {
   return JSON.stringify(normalizeComparableValue(section, field, a)) === JSON.stringify(normalizeComparableValue(section, field, b));
 }
 
-function buildPhase1Stage1UserQuestion(stage1Preview) {
-  const prompt = safeString(stage1Preview?.prompt).trim();
-  const items = Array.isArray(stage1Preview?.items) ? stage1Preview.items : [];
-  const hasChiefComplaintItem = items.some((item) => item?.key === 'visits.chief_complaint' || item?.field === 'chief_complaint');
-  const toggleHint = '항목 번호만 입력하면 해당 항목이 non-default policy로 전환됩니다. (예: "1")';
-  const chiefComplaintHint = hasChiefComplaintItem
-    ? 'chief_complaint 항목은 "번호 keep", "번호 add", "번호 replace"를 지원합니다.'
-    : '';
+function buildPhase1Stage1ArgPatch(sequentialState, currentItem, choiceValue) {
+  return {
+    phase1_decision: {
+      phase1_multiple_policy_state: deepClone(sequentialState?.policyState || {}),
+      phase1_multiple_policy_cursor: sequentialState?.cursor || 0,
+      phase1_multiple_policy_choice_item_key: currentItem?.key || '',
+      phase1_multiple_policy_choice: choiceValue
+    }
+  };
+}
 
-  if (!prompt) {
+function buildPhase1Stage1UserQuestion(stage1Preview, sequentialState) {
+  const prompt = safeString(stage1Preview?.prompt).trim();
+  const currentItem = sequentialState?.currentItem || null;
+  const interactiveItems = getStage1InteractiveItems(stage1Preview);
+  const displayOnlyItems = getStage1DisplayOnlyItems(stage1Preview);
+  if (!currentItem) {
     return [
-      toggleHint,
-      hasChiefComplaintItem
-        ? '정책을 명시하려면 "번호 keep/add/replace" 형식으로 입력하세요. 0 입력하면 모두 기본값 유지'
-        : '정책을 명시하려면 "번호 add" 또는 "번호 replace" 형식으로 입력하세요. 0 입력하면 모두 기본값 유지',
-      chiefComplaintHint
+      prompt || 'Stage 1 선택이 모두 완료되었습니다.',
+      displayOnlyItems.length > 0 ? `선택 불필요 항목 ${displayOnlyItems.length}개는 preview에 표시됩니다.` : ''
     ].filter(Boolean).join('\n');
   }
 
-  return [prompt, toggleHint, chiefComplaintHint].filter(Boolean).join('\n');
+  const itemProgress = `${sequentialState?.cursor + 1 || 1}/${interactiveItems.length || 1}`;
+  const isChiefComplaintItem =
+    currentItem.key === 'visits.chief_complaint' || currentItem.field === 'chief_complaint';
+
+  return [
+    prompt || 'Stage 1 항목을 확인해 주세요.',
+    `현재 항목: ${itemProgress} ${safeString(currentItem.key || currentItem.field || '')}`,
+    displayOnlyItems.length > 0 ? `선택 불필요 항목 ${displayOnlyItems.length}개는 preview에 함께 표시됩니다.` : '',
+    isChiefComplaintItem
+      ? '1=keep, 2=add, 3=replace'
+      : '1=add, 2=replace'
+  ].filter(Boolean).join('\n');
 }
 
-function buildPhase1Stage1RequiredInput(stage1Preview) {
-  const items = Array.isArray(stage1Preview?.items) ? stage1Preview.items : [];
-  const hasChiefComplaintItem = items.some((item) => item?.key === 'visits.chief_complaint' || item?.field === 'chief_complaint');
+function buildPhase1Stage1RequiredInput(stage1Preview, sequentialState) {
+  const currentItem = sequentialState?.currentItem || null;
+  if (!currentItem) {
+    return null;
+  }
+
+  const isChiefComplaintItem =
+    currentItem.key === 'visits.chief_complaint' || currentItem.field === 'chief_complaint';
+  const choices = isChiefComplaintItem
+    ? [
+        {
+          number: 1,
+          label: 'keep current',
+          value: 'keep_current',
+          arg_patch: buildPhase1Stage1ArgPatch(sequentialState, currentItem, 1)
+        },
+        {
+          number: 2,
+          label: 'add',
+          value: 'add',
+          arg_patch: buildPhase1Stage1ArgPatch(sequentialState, currentItem, 2)
+        },
+        {
+          number: 3,
+          label: 'replace',
+          value: 'replace',
+          arg_patch: buildPhase1Stage1ArgPatch(sequentialState, currentItem, 3)
+        }
+      ]
+    : [
+        {
+          number: 1,
+          label: 'add',
+          value: 'add',
+          arg_patch: buildPhase1Stage1ArgPatch(sequentialState, currentItem, 1)
+        },
+        {
+          number: 2,
+          label: 'replace',
+          value: 'replace',
+          arg_patch: buildPhase1Stage1ArgPatch(sequentialState, currentItem, 2)
+        }
+      ];
+
   return {
-    type: 'text',
+    type: 'single_number_choice',
     field: 'phase1_multiple_policy_choice',
-    format: 'stage1_policy_choice',
-    allowed_input_description:
-      hasChiefComplaintItem
-        ? '0 또는 항목 번호, 필요 시 "번호 keep/add/replace" (keep은 chief_complaint에만 사용)'
-        : '0 또는 항목 번호, 필요 시 "번호 add" 또는 "번호 replace"',
-    examples: hasChiefComplaintItem ? ['0', '1', '1 keep', '1 add', '1 replace'] : ['0', '1', '1 add', '1 replace'],
-    arg_patch_template: {
-      phase1_decision: {
-        phase1_multiple_policy_choice: '__USER_INPUT__'
-      }
-    }
+    format: isChiefComplaintItem ? '1_keep_or_2_add_or_3_replace' : '1_add_or_2_replace',
+    allowed_input_description: isChiefComplaintItem
+      ? '1은 keep current, 2는 add, 3은 replace'
+      : '1은 add, 2는 replace',
+    examples: isChiefComplaintItem ? ['1', '2', '3'] : ['1', '2'],
+    choices,
+    arg_patch_template: buildPhase1Stage1ArgPatch(sequentialState, currentItem, '__USER_INPUT__')
   };
 }
 
@@ -1659,9 +2139,11 @@ function validateSelectableFieldsAgainstRegistry(transformedPayload, registryRul
   return { valid: true };
 }
 
-function buildPhase1Stage1ChoiceGuide(stage1Preview) {
-  const items = Array.isArray(stage1Preview?.items) ? stage1Preview.items : [];
-  const hasChiefComplaintItem = items.some((item) => item?.key === 'visits.chief_complaint' || item?.field === 'chief_complaint');
+function buildPhase1Stage1ChoiceGuide(stage1Preview, sequentialState) {
+  const currentItem = sequentialState?.currentItem || null;
+  const isChiefComplaintItem =
+    currentItem &&
+    (currentItem.key === 'visits.chief_complaint' || currentItem.field === 'chief_complaint');
   return {
     next_step_type: 'sender_transform',
     send_ready: false,
@@ -1669,40 +2151,19 @@ function buildPhase1Stage1ChoiceGuide(stage1Preview) {
     requires_choice_args: true,
     confirmation_field_path: '',
     choice_field_path: 'phase1_decision.phase1_multiple_policy_choice',
-    accepted_choice_input_type: 'text',
-    accepted_choice_format: 'stage1_policy_choice',
-    allowed_input_description:
-      hasChiefComplaintItem
-        ? '0 또는 항목 번호, 필요 시 "번호 keep/add/replace" (keep은 chief_complaint에만 사용)'
-        : '0 또는 항목 번호, 필요 시 "번호 add" 또는 "번호 replace"',
-    choice_examples: hasChiefComplaintItem ? ['0', '1', '1 keep', '1 add', '1 replace'] : ['0', '1', '1 add', '1 replace'],
-    user_input_prompt: buildPhase1Stage1UserQuestion(stage1Preview),
+    accepted_choice_input_type: 'single_number_choice',
+    accepted_choice_format: isChiefComplaintItem ? '1_keep_or_2_add_or_3_replace' : '1_add_or_2_replace',
+    allowed_input_description: isChiefComplaintItem
+      ? '1은 keep current, 2는 add, 3은 replace'
+      : '1은 add, 2는 replace',
+    choice_examples: isChiefComplaintItem ? ['1', '2', '3'] : ['1', '2'],
+    user_input_prompt: buildPhase1Stage1UserQuestion(stage1Preview, sequentialState),
     arg_patch_examples: {
-      keep_defaults: {
-        phase1_decision: {
-          phase1_multiple_policy_choice: 0
-        }
-      },
-      toggle_item_1_to_non_default: {
-        phase1_decision: {
-          phase1_multiple_policy_choice: 1
-        }
-      },
-      force_item_1_add: {
-        phase1_decision: {
-          phase1_multiple_policy_choice: '1 add'
-        }
-      },
-      force_item_1_keep: {
-        phase1_decision: {
-          phase1_multiple_policy_choice: '1 keep'
-        }
-      },
-      force_item_1_replace: {
-        phase1_decision: {
-          phase1_multiple_policy_choice: '1 replace'
-        }
-      }
+      choice_1: buildPhase1Stage1ArgPatch(sequentialState, currentItem, 1),
+      choice_2: buildPhase1Stage1ArgPatch(sequentialState, currentItem, 2),
+      ...(isChiefComplaintItem
+        ? { choice_3: buildPhase1Stage1ArgPatch(sequentialState, currentItem, 3) }
+        : {})
     }
   };
 }
@@ -1763,7 +2224,16 @@ function isPreviewBaselineReliable(currentState, transformedPayload) {
   return requestedPatientId == currentPatientId;
 }
 
-function buildPhase1Stage2ChoiceGuide() {
+function buildPhase1Stage2ChoiceGuide(decision = {}) {
+  const decisionPatch = {};
+  const policyState = decision?.phase1_multiple_policy_state || decision?.policyState;
+  if (policyState && typeof policyState === 'object' && !Array.isArray(policyState) && Object.keys(policyState).length > 0) {
+    decisionPatch.phase1_multiple_policy_state = deepClone(policyState);
+  }
+  if (Number.isFinite(decision?.phase1_multiple_policy_cursor)) {
+    decisionPatch.phase1_multiple_policy_cursor = decision.phase1_multiple_policy_cursor;
+  }
+
   return {
     next_step_type: 'sender_send',
     send_ready: false,
@@ -1781,11 +2251,13 @@ function buildPhase1Stage2ChoiceGuide() {
     arg_patch_per_choice: {
       '1': {
         phase1_decision: {
+          ...decisionPatch,
           phase1_full_preview_confirmation: 1
         }
       },
       '2': {
         phase1_decision: {
+          ...decisionPatch,
           phase1_full_preview_confirmation: 2
         }
       }
@@ -1794,7 +2266,7 @@ function buildPhase1Stage2ChoiceGuide() {
   };
 }
 
-function buildPhase1FullPreview(transformedPayload, currentState, headerTouched, findingsTouched, decision) {
+function buildPhase1FullPreview(transformedPayload, currentState, headerTouched, findingsTouched, decision, registryRules) {
   const headerChanges = [];
   const findingsChanges = [];
   const currentStateReliable = isPreviewBaselineReliable(currentState, transformedPayload);
@@ -1913,19 +2385,20 @@ function buildPhase1FullPreview(transformedPayload, currentState, headerTouched,
         continue;
       }
 
-      const storedBeforeValue = currentStateReliable && branchKey === 'pre_op'
-        ? getStoredPreOpField(currentState, toothNumber, fieldName, recordName)
+      const fieldRule = getPhase2RegistryFieldRule(registryRules, branchKey, fieldName);
+      const storedBeforeValue = currentStateReliable
+        ? getStoredFindingField(currentState, branchKey, toothNumber, fieldName, recordName)
         : '(current-state unavailable)';
-      const rowResolution = currentStateReliable && branchKey === 'pre_op'
-        ? getStoredPreOpRowResolution(currentState, toothNumber, recordName)
+      const rowResolution = currentStateReliable
+        ? getStoredFindingRowResolution(currentState, branchKey, toothNumber, recordName)
         : 'unresolved';
-      const pendingRowCreation = currentStateReliable && branchKey === 'pre_op' && rowResolution === 'unresolved';
+      const pendingRowCreation = currentStateReliable && rowResolution === 'unresolved';
       const beforeValue = pendingRowCreation ? '(new row)' : storedBeforeValue;
       const changeKey = `${branchKey}.${toothNumber}.${fieldName}`;
       const policy = resolveFieldPolicy(changeKey, fieldName, decision);
 
       let afterValue;
-      if (fieldName === 'Symptom' && policy === 'add') {
+      if (safeString(fieldRule?.type) === 'multi_select' && policy === 'add') {
         afterValue = mergeMultiSelectAdd(
           pendingRowCreation ? undefined : storedBeforeValue,
           incomingValue
@@ -1993,7 +2466,7 @@ function buildPhase1FullPreview(transformedPayload, currentState, headerTouched,
       current_state_reliable: currentStateReliable
     },
     policy_summary: {
-      multiple_default_policy: 'add',
+      multiple_default_policy: 'field_specific',
       replace_override_applied_to: replaceOverrideAppliedTo
     },
     header_changes: headerChanges,
@@ -2021,8 +2494,6 @@ function buildPhase1FullPreview(transformedPayload, currentState, headerTouched,
 }
 
 function buildSenderExecutionMetadata(headerTouched, stage2Preview, decision) {
-  const grouped = {};
-
   const branchGrouping = {};
 
   for (const change of stage2Preview.findings_changes || []) {
@@ -2074,6 +2545,8 @@ function buildSenderExecutionMetadata(headerTouched, stage2Preview, decision) {
       multiple_override_changed_fields: deepClone(decision?.replaceOverrides || []),
       replaceOverrides: deepClone(decision?.replaceOverrides || []),
       addOverrides: deepClone(decision?.addOverrides || []),
+      keepCurrentOverrides: deepClone(decision?.keepCurrentOverrides || []),
+      phase1_multiple_policy_state: deepClone(decision?.phase1_multiple_policy_state || decision?.policyState || {}),
       final_confirmation: 'confirmed'
     }
   };
@@ -2128,6 +2601,8 @@ function extractPhase1DecisionForTransform(rawDecision) {
   delete cleaned.stage2_confirmation;
   delete cleaned.confirmation;
   delete cleaned.send_now;
+  delete cleaned.phase1_multiple_policy_choice;
+  delete cleaned.phase1_multiple_policy_choice_item_key;
 
   return Object.keys(cleaned).length > 0 ? cleaned : undefined;
 }
@@ -2141,7 +2616,10 @@ function buildPhase1ExecutionPayload(transformedPayload, stage2Preview, headerTo
     if (!recordName) continue;
 
     findingsByRecordName[recordName] ||= {};
-    findingsByRecordName[recordName][change.field] = change.after;
+    findingsByRecordName[recordName][change.field] = {
+      after: change.after,
+      no_op: change.no_op
+    };
   }
 
   finalPayload.findings_records = finalPayload.findings_records.map((record) => {
@@ -2149,19 +2627,44 @@ function buildPhase1ExecutionPayload(transformedPayload, stage2Preview, headerTo
     const patch = findingsByRecordName[recordName];
     if (!patch) return record;
 
+    const nextFields = { ...record.fields };
+    for (const [fieldName, fieldPatch] of Object.entries(patch)) {
+      if (fieldPatch?.no_op) {
+        delete nextFields[fieldName];
+      } else {
+        nextFields[fieldName] = fieldPatch.after;
+      }
+    }
+
+    const hasWritableFields = Object.keys(nextFields).some((fieldName) => !['Record name', 'Visit ID', 'Tooth number'].includes(fieldName));
+    if (!hasWritableFields) {
+      return null;
+    }
+
     return {
       ...record,
-      fields: {
-        ...record.fields,
-        ...patch
-      }
+      fields: nextFields
     };
-  });
+  }).filter(Boolean);
 
   for (const change of stage2Preview.header_changes || []) {
-    if (change.section === 'visits' && change.field === 'chief_complaint') {
+    if (change.section === 'patients' && (change.field === 'birth_year' || change.field === 'gender')) {
+      finalPayload.patients = finalPayload.patients || {};
+      if (change.no_op) {
+        delete finalPayload.patients[change.field];
+      } else {
+        finalPayload.patients[change.field] = change.after;
+      }
+      continue;
+    }
+
+    if (change.section === 'visits' && (change.field === 'chief_complaint' || change.field === 'pain_level' || change.field === 'visit_type')) {
       finalPayload.visits = finalPayload.visits || {};
-      finalPayload.visits.chief_complaint = change.after;
+      if (change.no_op) {
+        delete finalPayload.visits[change.field];
+      } else {
+        finalPayload.visits[change.field] = change.after;
+      }
     }
   }
 
@@ -2279,16 +2782,36 @@ async function buildPhase1TransformEnvelope(payload, transformResult, phase1Deci
     return String(value);
   };
 
-  const buildStage1ItemBlock = (item) => [
-    `[${item.number}] ${safeString(item.key || item.field || '')}`,
-    `- before: ${formatVisibleValue(item.before)}`,
-    `- incoming: ${formatVisibleValue(item.incoming)}`,
-    ...(item.key === 'visits.chief_complaint' || item.field === 'chief_complaint'
-      ? [`- if keep current: ${formatVisibleValue(item.before)}`]
-      : [`- default: ${formatVisibleValue(item.default_policy)}`]),
-    `- if add: ${formatVisibleValue(item.after_if_add)}`,
-    `- if replace: ${formatVisibleValue(item.after_if_replace)}`
-  ].join('\n');
+  const buildStage1ItemBlock = (item) => {
+    const isChiefComplaintItem =
+      item.key === 'visits.chief_complaint' || item.field === 'chief_complaint';
+    const lines = [
+      `[${item.number}] ${safeString(item.key || item.field || '')}`,
+      `- type: ${item.display_only ? 'display_only' : 'interactive'}`,
+      `- status: ${item.display_only ? '변경 없음 / 선택 불필요' : '선택 필요'}`,
+      `- before: ${formatVisibleValue(item.before)}`,
+      `- incoming: ${formatVisibleValue(item.incoming)}`
+    ];
+
+    if (item.display_only) {
+      lines.push(`- resolved policy: ${formatVisibleValue(item.resolved_policy || item.default_policy)}`);
+      lines.push(`- final after: ${formatVisibleValue(item.resolved_after)}`);
+      if (item.transparency_reason) {
+        lines.push(`- note: ${formatVisibleValue(item.transparency_reason)}`);
+      }
+      return lines.join('\n');
+    }
+
+    if (isChiefComplaintItem) {
+      lines.push(`- if keep current: ${formatVisibleValue(item.after_if_keep_current ?? item.before)}`);
+    } else {
+      lines.push(`- default: ${formatVisibleValue(item.default_policy)}`);
+    }
+
+    lines.push(`- if add: ${formatVisibleValue(item.after_if_add)}`);
+    lines.push(`- if replace: ${formatVisibleValue(item.after_if_replace)}`);
+    return lines.join('\n');
+  };
 
   const buildStage2HeaderBlock = (change) => [
     `[header] ${safeString(change.section)}.${safeString(change.field)}`,
@@ -2317,187 +2840,130 @@ async function buildPhase1TransformEnvelope(payload, transformResult, phase1Deci
   };
 
   const stage1Preview = currentState.ready
-    ? buildPhase1MultiplePreview(transformedPayload, currentState)
+    ? buildPhase1MultiplePreview(transformedPayload, currentState, registryRules)
     : { stage: 'multiple_policy_preview', items: [], prompt: '' };
+  const sequentialStage1 = buildSequentialStage1PolicyState(phase1DecisionRaw, stage1Preview);
+  const stage1AllItems = getStage1AllItems(stage1Preview);
+  const stage1InteractiveItems = getStage1InteractiveItems(stage1Preview);
+  const stage1DisplayOnlyItems = getStage1DisplayOnlyItems(stage1Preview);
 
-  const rawStage1Decision = extractPhase1Stage1Input(phase1DecisionRaw);
-
-  if ((stage1Preview.items || []).length > 0 && rawStage1Decision === undefined) {
-    const stage1Guide = buildPhase1Stage1ChoiceGuide(stage1Preview);
-    const stage1UserQuestion = buildPhase1Stage1UserQuestion(stage1Preview);
-    const stage1RequiredInput = buildPhase1Stage1RequiredInput(stage1Preview);
-    const isSingleStage1Item = (stage1Preview.items || []).length === 1;
-    const singleStage1Item = isSingleStage1Item ? stage1Preview.items[0] : null;
-    const isSingleChiefComplaintItem =
-      isSingleStage1Item &&
-      (singleStage1Item?.key === 'visits.chief_complaint' || singleStage1Item?.field === 'chief_complaint');
-    const previewBodyMarkdown = (stage1Preview.items || [])
+  if (stage1InteractiveItems.length > 0 && !sequentialStage1.complete) {
+    const stage1Guide = buildPhase1Stage1ChoiceGuide(stage1Preview, sequentialStage1);
+    const stage1UserQuestion = buildPhase1Stage1UserQuestion(stage1Preview, sequentialStage1);
+    const stage1RequiredInput = buildPhase1Stage1RequiredInput(stage1Preview, sequentialStage1);
+    const currentStage1Item = sequentialStage1.currentItem;
+    const isChiefComplaintItem =
+      currentStage1Item &&
+      (currentStage1Item.key === 'visits.chief_complaint' || currentStage1Item.field === 'chief_complaint');
+    const previewBodyMarkdown = stage1AllItems
       .map((item) => buildStage1ItemBlock(item))
       .join('\n\n');
-    const compactAssistantQuestion = isSingleChiefComplaintItem
+    const compactAssistantQuestion = currentStage1Item
       ? [
-          `${safeString(singleStage1Item?.key || singleStage1Item?.field || '')}`,
+          ...(sequentialStage1.invalidChoice ? ['허용된 번호로 다시 선택해 주세요.', ''] : []),
+          `[${currentStage1Item.number}] ${safeString(currentStage1Item.key || currentStage1Item.field || '')}`,
+          `- before: ${formatVisibleValue(currentStage1Item.before)}`,
+          `- incoming: ${formatVisibleValue(currentStage1Item.incoming)}`,
+          ...(isChiefComplaintItem
+            ? [`- if keep current: ${formatVisibleValue(currentStage1Item.after_if_keep_current ?? currentStage1Item.before)}`]
+            : []),
+          `- if add: ${formatVisibleValue(currentStage1Item.after_if_add)}`,
+          `- if replace: ${formatVisibleValue(currentStage1Item.after_if_replace)}`,
           '',
-          `before: ${formatVisibleValue(singleStage1Item?.before)}`,
-          `incoming: ${formatVisibleValue(singleStage1Item?.incoming)}`,
-          `if keep current: ${formatVisibleValue(singleStage1Item?.before)}`,
-          `if add: ${formatVisibleValue(singleStage1Item?.after_if_add)}`,
-          `if replace: ${formatVisibleValue(singleStage1Item?.after_if_replace)}`,
+          stage1UserQuestion,
           '',
-          '1. keep current',
-          '2. add',
-          '3. replace'
+          ...(isChiefComplaintItem ? ['1. keep current', '2. add', '3. replace'] : ['1. add', '2. replace'])
         ].join('\n')
-      : isSingleStage1Item
-      ? [
-          `${safeString(singleStage1Item?.key || singleStage1Item?.field || '')}`,
-          `- before: ${formatVisibleValue(singleStage1Item?.before)}`,
-          `- incoming: ${formatVisibleValue(singleStage1Item?.incoming)}`,
-          `- if add: ${formatVisibleValue(singleStage1Item?.after_if_add)}`,
-          `- if replace: ${formatVisibleValue(singleStage1Item?.after_if_replace)}`,
-          '',
-          '1. add',
-          '2. replace'
-        ].join('\n')
-      : [
-          previewBodyMarkdown,
-          '',
-          stage1UserQuestion
-        ].join('\n');
-    const compactRequiredInput = isSingleChiefComplaintItem
-      ? {
-          type: 'single_number_choice',
-          field: 'phase1_multiple_policy_choice',
-          choices: [
-            {
-              number: 1,
-              label: `keep current — ${formatVisibleValue(singleStage1Item?.before)} -> ${formatVisibleValue(singleStage1Item?.before)}`,
-              value: 'keep_current',
-              arg_patch: {
-                phase1_decision: {
-                  phase1_multiple_policy_choice: `${singleStage1Item.number} keep`
-                }
-              }
-            },
-            {
-              number: 2,
-              label: `add — ${formatVisibleValue(singleStage1Item?.before)} -> ${formatVisibleValue(singleStage1Item?.after_if_add)}`,
-              value: 'add',
-              arg_patch: {
-                phase1_decision: {
-                  phase1_multiple_policy_choice: `${singleStage1Item.number} add`
-                }
-              }
-            },
-            {
-              number: 3,
-              label: `replace — ${formatVisibleValue(singleStage1Item?.before)} -> ${formatVisibleValue(singleStage1Item?.after_if_replace)}`,
-              value: 'replace',
-              arg_patch: {
-                phase1_decision: {
-                  phase1_multiple_policy_choice: `${singleStage1Item.number} replace`
-                }
-              }
-            }
-          ]
-        }
-      : isSingleStage1Item
-      ? {
-          type: 'single_number_choice',
-          field: 'phase1_multiple_policy_choice',
-          choices: [
-            {
-              number: 1,
-              label: `add — ${formatVisibleValue(singleStage1Item?.before)} -> ${formatVisibleValue(singleStage1Item?.after_if_add)}`,
-              value: 'add',
-              arg_patch: {
-                phase1_decision: {
-                  phase1_multiple_policy_choice: `${singleStage1Item.number} add`
-                }
-              }
-            },
-            {
-              number: 2,
-              label: `replace — ${formatVisibleValue(singleStage1Item?.before)} -> ${formatVisibleValue(singleStage1Item?.after_if_replace)}`,
-              value: 'replace',
-              arg_patch: {
-                phase1_decision: {
-                  phase1_multiple_policy_choice: `${singleStage1Item.number} replace`
-                }
-              }
-            }
-          ]
-        }
-      : stage1RequiredInput;
+      : stage1UserQuestion;
 
-  return {
-    ok: true,
-    tool: 'sender_transform',
-    request_id: transformResult.request_id,
-    status: transformResult.status,
-    stage: 'PHASE1_STAGE1_PREVIEW',
-    input_hash: transformResult.input_hash,
-    transformed_hash: transformResult.transformed_hash,
-    transformed_payload: transformResult.transformed_payload,
-    phase1: {
-      applicable: true,
-      stage: 1,
-      current_state_ready: true,
-      stage1_preview: stage1Preview,
-      next_step: stage1Guide
-    },
-    interaction: {
-      mode: 'ask_user',
-      ui_kind: 'preview_confirmation',
-      user_message: '기존 방문 업데이트 multiple preview입니다. 아래 내용을 확인한 뒤 입력해 주세요.',
-      assistant_question: compactAssistantQuestion,
-      preview_body_markdown: previewBodyMarkdown,
-      required_user_input: compactRequiredInput,
-      next_step: stage1Guide,
-      do_not_ask: []
-    },
-    execution_contract: {
-      contract_version: '1.0',
-      mode: 'await_user_choice',
-      must_show_message: true,
-      user_visible_message: '기존 방문 업데이트 multiple preview입니다. 아래 내용을 확인한 뒤 입력해 주세요.',
-      must_ask_user: true,
-      user_question: compactAssistantQuestion,
-      accepted_input_type: isSingleStage1Item ? 'single_number_choice' : 'text',
-      accepted_format: isSingleChiefComplaintItem ? '1_keep_or_2_add_or_3_replace' : isSingleStage1Item ? '1_add_or_2_replace' : 'stage1_policy_choice',
-      allowed_input_description: isSingleChiefComplaintItem
-        ? '1은 keep current, 2는 add, 3은 replace'
-        : isSingleStage1Item
-        ? '1은 add, 2는 replace'
-        : '0 또는 항목 번호, 필요 시 "번호 keep/add/replace" (keep은 chief_complaint에만 사용)',
-      allowed_input_examples: isSingleChiefComplaintItem ? ['1', '2', '3'] : isSingleStage1Item ? ['1', '2'] : ['0', '1', '1 keep', '1 add', '1 replace'],
-      allowed_actions: [
-        'show_preview',
-        isSingleStage1Item ? 'ask_single_number_choice' : 'ask_text_input',
-        'build_full_preview_after_user_choice'
-      ],
-      forbidden_actions: [
-        'auto_send_without_confirmation'
-      ],
-      auto_resend_allowed: false,
-      stop_after_response: false,
-      next_step: stage1Guide
-    },
-    debug: {
-      ...transformResult.debug,
-      phase1_applicable: true,
-      current_state_ready: true
-    }
-  };
-}
+    return {
+      ok: true,
+      tool: 'sender_transform',
+      request_id: transformResult.request_id,
+      status: transformResult.status,
+      stage: 'PHASE1_STAGE1_PREVIEW',
+      input_hash: transformResult.input_hash,
+      transformed_hash: transformResult.transformed_hash,
+      transformed_payload: transformResult.transformed_payload,
+      phase1: {
+        applicable: true,
+        stage: 1,
+        current_state_ready: true,
+        stage1_preview: stage1Preview,
+        stage1_decision: buildPhase1DecisionFromPolicyState(stage1Preview, sequentialStage1.policyState, sequentialStage1.cursor),
+        stage1_progress: {
+          current_item_key: currentStage1Item?.key || '',
+          cursor: sequentialStage1.cursor,
+          total_items: stage1InteractiveItems.length,
+          total_all_items: stage1AllItems.length,
+          total_interactive_items: stage1InteractiveItems.length,
+          display_only_item_count: stage1DisplayOnlyItems.length,
+          invalid_choice: sequentialStage1.invalidChoice === true,
+          choice_accepted: sequentialStage1.choiceAccepted === true
+        },
+        next_step: stage1Guide
+      },
+      interaction: {
+        mode: 'ask_user',
+        ui_kind: 'preview_confirmation',
+        user_message: sequentialStage1.invalidChoice
+          ? '기존 방문 업데이트 Stage 1 선택이 유효하지 않았습니다. 현재 항목을 다시 선택해 주세요.'
+          : '기존 방문 업데이트 Stage 1 preview입니다. 전체 항목을 먼저 보여드리고, 선택이 필요한 현재 항목만 입력받습니다.',
+        assistant_question: compactAssistantQuestion,
+        preview_body_markdown: previewBodyMarkdown,
+        required_user_input: stage1RequiredInput,
+        next_step: stage1Guide,
+        do_not_ask: []
+      },
+      execution_contract: {
+        contract_version: '1.0',
+        mode: 'await_user_choice',
+        must_show_message: true,
+        user_visible_message: sequentialStage1.invalidChoice
+          ? '허용된 숫자로 현재 항목을 다시 선택해 주세요.'
+          : '기존 방문 업데이트 Stage 1 preview입니다. 현재 항목만 순서대로 선택해 주세요.',
+        must_ask_user: true,
+        user_question: compactAssistantQuestion,
+        accepted_input_type: 'single_number_choice',
+        accepted_format: isChiefComplaintItem ? '1_keep_or_2_add_or_3_replace' : '1_add_or_2_replace',
+        allowed_input_description: isChiefComplaintItem
+          ? '1은 keep current, 2는 add, 3은 replace'
+          : '1은 add, 2는 replace',
+        allowed_input_examples: isChiefComplaintItem ? ['1', '2', '3'] : ['1', '2'],
+        allowed_actions: [
+          'show_preview',
+          'ask_single_number_choice',
+          'resume_stage1_or_build_full_preview'
+        ],
+        forbidden_actions: [
+          'auto_send_without_confirmation'
+        ],
+        auto_resend_allowed: false,
+        stop_after_response: false,
+        next_step: stage1Guide
+      },
+      debug: {
+        ...transformResult.debug,
+        phase1_applicable: true,
+        current_state_ready: true,
+        stage1_cursor: sequentialStage1.cursor,
+        stage1_invalid_choice: sequentialStage1.invalidChoice === true
+      }
+    };
+  }
 
-  const phase1Decision = parsePhase1Decision(rawStage1Decision, stage1Preview);
-	  const stage2Preview = buildPhase1FullPreview(
-	    transformedPayload,
-	    currentState,
-	    headerTouched,
+  const phase1Decision = buildPhase1DecisionFromPolicyState(
+    stage1Preview,
+    sequentialStage1.policyState,
+    sequentialStage1.cursor
+  );
+  const stage2Preview = buildPhase1FullPreview(
+    transformedPayload,
+    currentState,
+    headerTouched,
     findingsTouched,
-    phase1Decision
+    phase1Decision,
+    registryRules
   );
 	  const finalExecutionPayload = buildPhase1ExecutionPayload(
 	    transformedPayload,
@@ -2539,7 +3005,7 @@ async function buildPhase1TransformEnvelope(payload, transformResult, phase1Deci
       stage1_preview: stage1Preview,
       stage1_decision: phase1Decision,
       stage2_preview: stage2Preview,
-      next_step: buildPhase1Stage2ChoiceGuide()
+      next_step: buildPhase1Stage2ChoiceGuide(phase1Decision)
     },
 	    interaction: {
 	      mode: 'ask_user',
@@ -2550,12 +3016,12 @@ async function buildPhase1TransformEnvelope(payload, transformResult, phase1Deci
 	        type: 'single_number_choice',
 	        field: 'phase1_full_preview_confirmation',
         choices: [
-          { number: 1, label: '이대로 진행', value: 'send_now', arg_patch: { phase1_decision: { phase1_full_preview_confirmation: 1 } } },
-          { number: 2, label: '취소', value: 'cancel', arg_patch: { phase1_decision: { phase1_full_preview_confirmation: 2 } } }
+          { number: 1, label: '이대로 진행', value: 'send_now', arg_patch: buildPhase1Stage2ChoiceGuide(phase1Decision).arg_patch_per_choice['1'] },
+          { number: 2, label: '취소', value: 'cancel', arg_patch: buildPhase1Stage2ChoiceGuide(phase1Decision).arg_patch_per_choice['2'] }
         ]
       },
       ui_display_rules: buildNoOpDisplayRules(),
-      next_step: buildPhase1Stage2ChoiceGuide(),
+      next_step: buildPhase1Stage2ChoiceGuide(phase1Decision),
       do_not_ask: []
     },
 	    execution_contract: {
@@ -2582,7 +3048,7 @@ async function buildPhase1TransformEnvelope(payload, transformResult, phase1Deci
       ],
       auto_resend_allowed: false,
       stop_after_response: false,
-      next_step: buildPhase1Stage2ChoiceGuide()
+      next_step: buildPhase1Stage2ChoiceGuide(phase1Decision)
     },
     debug: {
       ...transformResult.debug,
@@ -5337,18 +5803,12 @@ async function runSendTool(args) {
           send_now: [1, '1', 'send_now', true],
           cancel: [2, '2', 'cancel', false]
         },
-        arg_patch: {
-          phase1_decision: {
-            phase1_full_preview_confirmation: 1
-          }
-        },
+        arg_patch: buildPhase1Stage2ChoiceGuide(envelope?.phase1?.stage1_decision).arg_patch_per_choice['1'],
         next_call_example: {
           use_same_payload: true,
-          phase1_decision: {
-            phase1_full_preview_confirmation: 1
-          }
+          ...buildPhase1Stage2ChoiceGuide(envelope?.phase1?.stage1_decision).arg_patch_per_choice['1']
         },
-        next_step: buildPhase1Stage2ChoiceGuide(),
+        next_step: buildPhase1Stage2ChoiceGuide(envelope?.phase1?.stage1_decision),
         interaction: {
           mode: 'inform',
           ui_kind: 'info',
