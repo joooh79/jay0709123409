@@ -1686,6 +1686,91 @@ function valuesEqual(a, b, section = '', field = '') {
   return JSON.stringify(normalizeComparableValue(section, field, a)) === JSON.stringify(normalizeComparableValue(section, field, b));
 }
 
+function formatStage1VisibleValue(value) {
+  if (value === undefined || value === null || value === '') return '(empty)';
+  if (Array.isArray(value)) {
+    const normalized = value
+      .map((entry) => safeString(entry).trim())
+      .filter(Boolean);
+    return normalized.length > 0 ? normalized.join(', ') : '(empty)';
+  }
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
+
+function buildPhase1Stage1ItemBlock(item) {
+  const isChiefComplaintItem =
+    item.key === 'visits.chief_complaint' || item.field === 'chief_complaint';
+  const lines = [
+    `[${item.number}] ${safeString(item.key || item.field || '')}`,
+    `- 상태: ${item.display_only ? '선택 불필요 / 변경 없음' : '선택 필요'}`,
+    `- before: ${formatStage1VisibleValue(item.before)}`,
+    `- incoming: ${formatStage1VisibleValue(item.incoming)}`
+  ];
+
+  if (item.display_only) {
+    lines.push(`- resolved policy: ${formatStage1VisibleValue(item.resolved_policy || item.default_policy)}`);
+    lines.push(`- final after: ${formatStage1VisibleValue(item.resolved_after)}`);
+    if (item.transparency_reason) {
+      lines.push(`- note: ${formatStage1VisibleValue(item.transparency_reason)}`);
+    }
+    return lines.join('\n');
+  }
+
+  if (isChiefComplaintItem) {
+    lines.push(`- if keep current: ${formatStage1VisibleValue(item.after_if_keep_current ?? item.before)}`);
+  }
+
+  lines.push(`- if add: ${formatStage1VisibleValue(item.after_if_add)}`);
+  lines.push(`- if replace: ${formatStage1VisibleValue(item.after_if_replace)}`);
+  return lines.join('\n');
+}
+
+function buildPhase1Stage1VisibleBody(stage1Preview, sequentialState) {
+  const currentItem = sequentialState?.currentItem || null;
+  const allItems = getStage1AllItems(stage1Preview);
+  const interactiveItems = getStage1InteractiveItems(stage1Preview);
+  const currentProgress = `${(sequentialState?.cursor || 0) + 1}/${interactiveItems.length || 1}`;
+  const currentItemKey = safeString(currentItem?.key || currentItem?.field || '');
+  const isChiefComplaintItem =
+    currentItem &&
+    (currentItem.key === 'visits.chief_complaint' || currentItem.field === 'chief_complaint');
+  const intro = sequentialState?.invalidChoice
+    ? '기존 방문 업데이트 Stage 1 선택이 유효하지 않았습니다. 현재 항목을 다시 선택해 주세요.'
+    : '기존 방문 업데이트 Stage 1 preview입니다. 전체 항목을 먼저 보여드리고, 현재 선택 항목만 입력받습니다.';
+  const stage1FullListBlock = [
+    '[Stage 1 전체 항목]',
+    ...allItems.map((item) => buildPhase1Stage1ItemBlock(item))
+  ].join('\n\n');
+
+  if (!currentItem) {
+    return [
+      intro,
+      '',
+      stage1FullListBlock
+    ].filter(Boolean).join('\n');
+  }
+
+  return [
+    intro,
+    '',
+    stage1FullListBlock,
+    '',
+    '[현재 선택 항목]',
+    `현재 항목: ${currentProgress} ${currentItemKey}`,
+    '- 상태: 선택 필요',
+    `- before: ${formatStage1VisibleValue(currentItem.before)}`,
+    `- incoming: ${formatStage1VisibleValue(currentItem.incoming)}`,
+    ...(isChiefComplaintItem
+      ? [`- if keep current: ${formatStage1VisibleValue(currentItem.after_if_keep_current ?? currentItem.before)}`]
+      : []),
+    `- if add: ${formatStage1VisibleValue(currentItem.after_if_add)}`,
+    `- if replace: ${formatStage1VisibleValue(currentItem.after_if_replace)}`,
+    '',
+    ...(isChiefComplaintItem ? ['1. keep current', '2. add', '3. replace'] : ['1. add', '2. replace'])
+  ].join('\n');
+}
+
 function buildPhase1Stage1ArgPatch(sequentialState, currentItem, choiceValue) {
   return {
     phase1_decision: {
@@ -1698,30 +1783,7 @@ function buildPhase1Stage1ArgPatch(sequentialState, currentItem, choiceValue) {
 }
 
 function buildPhase1Stage1UserQuestion(stage1Preview, sequentialState) {
-  const prompt = safeString(stage1Preview?.prompt).trim();
-  const currentItem = sequentialState?.currentItem || null;
-  const interactiveItems = getStage1InteractiveItems(stage1Preview);
-  const displayOnlyItems = getStage1DisplayOnlyItems(stage1Preview);
-  if (!currentItem) {
-    return [
-      prompt || 'Stage 1 선택이 모두 완료되었습니다.',
-      displayOnlyItems.length > 0 ? `선택 불필요 항목 ${displayOnlyItems.length}개는 preview에 표시됩니다.` : ''
-    ].filter(Boolean).join('\n');
-  }
-
-  const itemProgress = `${sequentialState?.cursor + 1 || 1}/${interactiveItems.length || 1}`;
-  const isChiefComplaintItem =
-    currentItem.key === 'visits.chief_complaint' || currentItem.field === 'chief_complaint';
-
-  return [
-    '[현재 선택 항목]',
-    prompt || 'Stage 1 항목을 확인해 주세요.',
-    `현재 항목: ${itemProgress} ${safeString(currentItem.key || currentItem.field || '')}`,
-    displayOnlyItems.length > 0 ? `선택 불필요 항목 ${displayOnlyItems.length}개는 아래 전체 항목 목록에 함께 표시됩니다.` : '',
-    isChiefComplaintItem
-      ? '1=keep, 2=add, 3=replace'
-      : '1=add, 2=replace'
-  ].filter(Boolean).join('\n');
+  return buildPhase1Stage1VisibleBody(stage1Preview, sequentialState);
 }
 
 function buildPhase1Stage1RequiredInput(stage1Preview, sequentialState) {
@@ -2771,47 +2833,7 @@ async function buildPhase1TransformEnvelope(payload, transformResult, phase1Deci
     };
   }
 
-  const formatVisibleValue = (value) => {
-    if (value === undefined || value === null || value === '') return '(empty)';
-    if (Array.isArray(value)) {
-      const normalized = value
-        .map((entry) => safeString(entry).trim())
-        .filter(Boolean);
-      return normalized.length > 0 ? normalized.join(', ') : '(empty)';
-    }
-    if (typeof value === 'object') return JSON.stringify(value);
-    return String(value);
-  };
-
-  const buildStage1ItemBlock = (item) => {
-    const isChiefComplaintItem =
-      item.key === 'visits.chief_complaint' || item.field === 'chief_complaint';
-    const lines = [
-      `[${item.number}] ${safeString(item.key || item.field || '')}`,
-      `- 상태: ${item.display_only ? '선택 불필요 / 변경 없음' : '선택 필요'}`,
-      `- before: ${formatVisibleValue(item.before)}`,
-      `- incoming: ${formatVisibleValue(item.incoming)}`
-    ];
-
-    if (item.display_only) {
-      lines.push(`- resolved policy: ${formatVisibleValue(item.resolved_policy || item.default_policy)}`);
-      lines.push(`- final after: ${formatVisibleValue(item.resolved_after)}`);
-      if (item.transparency_reason) {
-        lines.push(`- note: ${formatVisibleValue(item.transparency_reason)}`);
-      }
-      return lines.join('\n');
-    }
-
-    if (isChiefComplaintItem) {
-      lines.push(`- if keep current: ${formatVisibleValue(item.after_if_keep_current ?? item.before)}`);
-    } else {
-      lines.push(`- default: ${formatVisibleValue(item.default_policy)}`);
-    }
-
-    lines.push(`- if add: ${formatVisibleValue(item.after_if_add)}`);
-    lines.push(`- if replace: ${formatVisibleValue(item.after_if_replace)}`);
-    return lines.join('\n');
-  };
+  const formatVisibleValue = formatStage1VisibleValue;
 
   const buildStage2HeaderBlock = (change) => [
     `[header] ${safeString(change.section)}.${safeString(change.field)}`,
@@ -2854,36 +2876,7 @@ async function buildPhase1TransformEnvelope(payload, transformResult, phase1Deci
     const isChiefComplaintItem =
       currentStage1Item &&
       (currentStage1Item.key === 'visits.chief_complaint' || currentStage1Item.field === 'chief_complaint');
-    const stage1FullListBlock = [
-      '[Stage 1 전체 항목]',
-      ...stage1AllItems.map((item) => buildStage1ItemBlock(item))
-    ].join('\n\n');
-    const stage1CanonicalBody = currentStage1Item
-      ? [
-          sequentialStage1.invalidChoice
-            ? '기존 방문 업데이트 Stage 1 선택이 유효하지 않았습니다. 현재 항목을 다시 선택해 주세요.'
-            : '기존 방문 업데이트 Stage 1 preview입니다. 전체 항목을 먼저 보여드리고, 현재 선택 항목만 입력받습니다.',
-          '',
-          stage1FullListBlock,
-          '',
-          '[현재 선택 항목]',
-          `현재 항목: ${sequentialStage1?.cursor + 1 || 1}/${stage1InteractiveItems.length || 1} ${safeString(currentStage1Item.key || currentStage1Item.field || '')}`,
-          `- 상태: 선택 필요`,
-          `- before: ${formatVisibleValue(currentStage1Item.before)}`,
-          `- incoming: ${formatVisibleValue(currentStage1Item.incoming)}`,
-          ...(isChiefComplaintItem
-            ? [`- if keep current: ${formatVisibleValue(currentStage1Item.after_if_keep_current ?? currentStage1Item.before)}`]
-            : []),
-          `- if add: ${formatVisibleValue(currentStage1Item.after_if_add)}`,
-          `- if replace: ${formatVisibleValue(currentStage1Item.after_if_replace)}`,
-          '',
-          ...(isChiefComplaintItem ? ['1. keep current', '2. add', '3. replace'] : ['1. add', '2. replace'])
-        ].join('\n')
-      : [
-          '기존 방문 업데이트 Stage 1 preview입니다.',
-          '',
-          stage1FullListBlock
-        ].join('\n');
+    const stage1CanonicalBody = buildPhase1Stage1VisibleBody(stage1Preview, sequentialStage1);
     const previewBodyMarkdown = stage1CanonicalBody;
     const stage1GuideWithFullBody = {
       ...stage1Guide,
