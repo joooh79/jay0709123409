@@ -2279,7 +2279,7 @@ function buildPhase1Stage2ChoiceGuide(decision = {}) {
   }
 
   return {
-    next_step_type: 'sender_send',
+    next_step_type: 'sender_transform',
     send_ready: false,
     requires_confirmation_args: true,
     requires_choice_args: false,
@@ -2318,6 +2318,129 @@ function buildPhase1Stage2ChoiceGuide(decision = {}) {
     },
     ui_display_rules: buildNoOpDisplayRules()
   };
+}
+
+function buildSenderTransformTerminalEnvelope({
+  requestId,
+  status,
+  stage,
+  inputHash,
+  transformedHash,
+  transformedPayload,
+  previewSummary,
+  resultType,
+  message,
+  uiKind,
+  executionMode,
+  allowedActions,
+  forbiddenActions,
+  extraFields,
+  debug
+}) {
+  const response = {
+    ok: true,
+    tool: 'sender_transform',
+    request_id: requestId,
+    status,
+    stage,
+    result_type: resultType,
+    message,
+    input_hash: inputHash,
+    transformed_hash: transformedHash,
+    transformed_payload: transformedPayload,
+    interaction: {
+      mode: 'inform',
+      ui_kind: uiKind,
+      user_message: message,
+      assistant_question: '',
+      required_user_input: null,
+      do_not_ask: []
+    },
+    execution_contract: {
+      contract_version: '1.0',
+      mode: executionMode,
+      must_show_message: true,
+      user_visible_message: message,
+      must_ask_user: false,
+      user_question: '',
+      accepted_input_type: null,
+      allowed_actions: allowedActions,
+      forbidden_actions: forbiddenActions,
+      auto_resend_allowed: false,
+      stop_after_response: true
+    },
+    debug: debug || {}
+  };
+
+  if (previewSummary !== undefined) {
+    response.preview_summary = previewSummary;
+  }
+
+  if (extraFields && typeof extraFields === 'object') {
+    Object.assign(response, extraFields);
+  }
+
+  return response;
+}
+
+function buildSenderTransformReadyToSendEnvelope({
+  stage,
+  requestId,
+  inputHash,
+  transformedHash,
+  transformedPayload,
+  previewSummary,
+  message,
+  nextStep,
+  extraFields,
+  debug
+}) {
+  const response = {
+    ok: true,
+    tool: 'sender_transform',
+    request_id: requestId,
+    status: 'SUCCESS',
+    stage,
+    result_type: 'ready_to_send',
+    message,
+    input_hash: inputHash,
+    transformed_hash: transformedHash,
+    transformed_payload: transformedPayload,
+    interaction: {
+      mode: 'inform',
+      ui_kind: 'info',
+      user_message: message,
+      assistant_question: '',
+      required_user_input: null,
+      next_step: nextStep,
+      do_not_ask: []
+    },
+    execution_contract: {
+      contract_version: '1.0',
+      mode: 'handoff',
+      must_show_message: true,
+      user_visible_message: message,
+      must_ask_user: false,
+      user_question: '',
+      accepted_input_type: null,
+      allowed_actions: ['show_send_ready_state', 'call_sender_send'],
+      forbidden_actions: ['ask_user_again_before_send'],
+      auto_resend_allowed: false,
+      stop_after_response: false,
+      next_step: nextStep
+    },
+    debug: debug || {}
+  };
+
+  if (previewSummary !== undefined) {
+    response.preview_summary = previewSummary;
+  }
+
+  if (extraFields && typeof extraFields === 'object') {
+    Object.assign(response, extraFields);
+  }
+
+  return response;
 }
 
 function buildPhase1FullPreview(transformedPayload, currentState, headerTouched, findingsTouched, decision, registryRules) {
@@ -2986,6 +3109,123 @@ async function buildPhase1TransformEnvelope(payload, transformResult, phase1Deci
     ...stage2Guide,
     user_input_prompt: stage2CanonicalBody
   };
+  const finalConfirmation = extractPhase1FinalConfirmation({
+    phase1_decision: phase1DecisionRaw
+  });
+  const phase1ReadyToSendNextStep = {
+    next_step_type: 'sender_send',
+    send_ready: true,
+    requires_confirmation_args: false,
+    requires_choice_args: false,
+    arg_patch: stage2Guide.arg_patch_per_choice['1'],
+    arg_patch_template: stage2Guide.arg_patch_template,
+    next_call_example: {
+      use_same_payload: true,
+      ...stage2Guide.arg_patch_per_choice['1']
+    },
+    ui_display_rules: buildNoOpDisplayRules()
+  };
+
+  if (finalConfirmation === 'cancel') {
+    return buildSenderTransformTerminalEnvelope({
+      requestId: transformResult.request_id,
+      status: 'CANCELLED',
+      stage: 'PHASE1_STAGE2_CANCELLED_LOCAL',
+      inputHash: transformResult.input_hash,
+      transformedHash: transformResult.transformed_hash,
+      transformedPayload: finalExecutionPayload,
+      previewSummary: buildPreviewSummary(finalExecutionPayload),
+      resultType: 'cancelled',
+      message: '전송이 취소되었습니다.',
+      uiKind: 'cancelled',
+      executionMode: 'stop',
+      allowedActions: ['show_stop_message'],
+      forbiddenActions: ['auto_send_without_confirmation'],
+      extraFields: {
+        phase1: {
+          applicable: true,
+          stage: 2,
+          current_state_ready: currentState.ready,
+          current_state_optional_fallback_used: !currentState.ready,
+          current_state_diagnostics: currentState.ready ? {} : (currentState.diagnostics || {}),
+          stage1_preview: stage1Preview,
+          stage1_decision: phase1Decision,
+          stage2_preview: stage2Preview
+        }
+      },
+      debug: {
+        ...transformResult.debug,
+        phase1_applicable: true,
+        phase1_stage2_cancelled_locally: true
+      }
+    });
+  }
+
+  if (finalConfirmation === 'send_now' && isPhase1Stage2NoOp(stage2Preview)) {
+    return buildSenderTransformTerminalEnvelope({
+      requestId: transformResult.request_id,
+      status: 'SUCCESS',
+      stage: 'PHASE1_STAGE2_NO_OP_LOCAL',
+      inputHash: transformResult.input_hash,
+      transformedHash: transformResult.transformed_hash,
+      transformedPayload: finalExecutionPayload,
+      previewSummary: buildPreviewSummary(finalExecutionPayload),
+      resultType: 'no_op',
+      message: '변경 사항이 없어 전송하지 않았습니다.',
+      uiKind: 'info',
+      executionMode: 'complete',
+      allowedActions: ['finish'],
+      forbiddenActions: ['send_no_op_payload'],
+      extraFields: {
+        phase1: {
+          applicable: true,
+          stage: 2,
+          current_state_ready: currentState.ready,
+          current_state_optional_fallback_used: !currentState.ready,
+          current_state_diagnostics: currentState.ready ? {} : (currentState.diagnostics || {}),
+          stage1_preview: stage1Preview,
+          stage1_decision: phase1Decision,
+          stage2_preview: stage2Preview
+        }
+      },
+      debug: {
+        ...transformResult.debug,
+        phase1_applicable: true,
+        phase1_stage2_no_op_resolved_locally: true
+      }
+    });
+  }
+
+  if (finalConfirmation === 'send_now') {
+    return buildSenderTransformReadyToSendEnvelope({
+      stage: 'PHASE1_STAGE2_READY_TO_SEND',
+      requestId: transformResult.request_id,
+      inputHash: transformResult.input_hash,
+      transformedHash: transformResult.transformed_hash,
+      transformedPayload: finalExecutionPayload,
+      previewSummary: buildPreviewSummary(finalExecutionPayload),
+      message: '최종 확인이 완료되었습니다. 실제 전송을 진행할 수 있습니다.',
+      nextStep: phase1ReadyToSendNextStep,
+      extraFields: {
+        phase1: {
+          applicable: true,
+          stage: 3,
+          current_state_ready: currentState.ready,
+          current_state_optional_fallback_used: !currentState.ready,
+          current_state_diagnostics: currentState.ready ? {} : (currentState.diagnostics || {}),
+          stage1_preview: stage1Preview,
+          stage1_decision: phase1Decision,
+          stage2_preview: stage2Preview,
+          next_step: phase1ReadyToSendNextStep
+        }
+      },
+      debug: {
+        ...transformResult.debug,
+        phase1_applicable: true,
+        phase1_stage2_ready_to_send: true
+      }
+    });
+  }
 	
 	  return {
 	    ok: true,
@@ -4710,6 +4950,7 @@ async function buildExistingPatientNewVisitTransformEnvelope(payload, transformR
     ? detectExistingPatientHeaderDiff({ patientBody: patientResp.body }, transformedPayload)
     : [];
   const headerDecision = parseExistingPatientNewVisitHeaderDecision(rawDecision);
+  const finalConfirmation = parseNewVisitFinalConfirmation(rawDecision);
 
   if (headerDiffs.length > 0 && !headerDecision) {
     return {
@@ -4808,6 +5049,85 @@ async function buildExistingPatientNewVisitTransformEnvelope(payload, transformR
       applied: headerDecision === 'apply'
     }))
   };
+  const existingPatientNewVisitReadyNextStep = {
+    next_step_type: 'sender_send',
+    send_ready: true,
+    requires_confirmation_args: false,
+    requires_choice_args: false,
+    arg_patch: {
+      phase1_decision: {
+        existing_patient_new_visit_header_decision: headerDecision === 'apply' ? 1 : 2,
+        new_visit_full_preview_confirmation: 1
+      }
+    },
+    next_call_example: {
+      use_same_payload: true,
+      phase1_decision: {
+        existing_patient_new_visit_header_decision: headerDecision === 'apply' ? 1 : 2,
+        new_visit_full_preview_confirmation: 1
+      }
+    }
+  };
+
+  if (headerDiffs.length > 0 && finalConfirmation === 'cancel') {
+    return buildSenderTransformTerminalEnvelope({
+      requestId: transformResult.request_id,
+      status: 'CANCELLED',
+      stage: 'EXISTING_PATIENT_NEW_VISIT_CANCELLED_LOCAL',
+      inputHash: transformResult.input_hash,
+      transformedHash: sha256(JSON.stringify(transformedPayload)),
+      transformedPayload,
+      previewSummary: preview_summary,
+      resultType: 'cancelled',
+      message: '전송이 취소되었습니다.',
+      uiKind: 'cancelled',
+      executionMode: 'stop',
+      allowedActions: ['show_stop_message'],
+      forbiddenActions: ['auto_send_without_confirmation'],
+      extraFields: {
+        existing_patient_new_visit: {
+          applicable: true,
+          stage: 2,
+          current_state_ready: currentStateReady,
+          patient_header_update_decision: headerDecision || 'not_needed',
+          patient_header_diff_preview: { items: headerDiffs }
+        }
+      },
+      debug: {
+        ...transformResult.debug,
+        existing_patient_new_visit_header_flow: true,
+        existing_patient_new_visit_cancelled_locally: true
+      }
+    });
+  }
+
+  if (headerDiffs.length > 0 && finalConfirmation === 'send_now') {
+    return buildSenderTransformReadyToSendEnvelope({
+      stage: 'EXISTING_PATIENT_NEW_VISIT_READY_TO_SEND',
+      requestId: transformResult.request_id,
+      inputHash: transformResult.input_hash,
+      transformedHash: sha256(JSON.stringify(transformedPayload)),
+      transformedPayload,
+      previewSummary: preview_summary,
+      message: '최종 확인이 완료되었습니다. 실제 전송을 진행할 수 있습니다.',
+      nextStep: existingPatientNewVisitReadyNextStep,
+      extraFields: {
+        existing_patient_new_visit: {
+          applicable: true,
+          stage: 3,
+          current_state_ready: currentStateReady,
+          patient_header_update_decision: headerDecision || 'not_needed',
+          patient_header_diff_preview: { items: headerDiffs },
+          next_step: existingPatientNewVisitReadyNextStep
+        }
+      },
+      debug: {
+        ...transformResult.debug,
+        existing_patient_new_visit_header_flow: true,
+        existing_patient_new_visit_ready_to_send: true
+      }
+    });
+  }
 
   return {
     ok: true,
@@ -4826,7 +5146,7 @@ async function buildExistingPatientNewVisitTransformEnvelope(payload, transformR
       patient_header_update_decision: headerDecision || 'not_needed',
       patient_header_diff_preview: { items: headerDiffs },
       next_step: {
-        next_step_type: 'sender_send',
+        next_step_type: 'sender_transform',
         send_ready: false,
         requires_confirmation_args: true,
         confirmation_field_path: 'phase1_decision.new_visit_full_preview_confirmation',
