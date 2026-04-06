@@ -4,6 +4,7 @@ FINAL
 STATUS
 - subordinate implementation/deployment reference source
 - records the implementation artifact identity for the active MCP Sender v2 runtime
+- records the final approved closeout implementation/version identity for the v2.0 release cycle
 - does not replace the operational protocol
 - does not replace code files themselves
 - does not authorize local implementation drift
@@ -17,10 +18,21 @@ This document identifies the code artifacts that implement the current MCP Sende
 
 The current implementation artifact set is:
 - proxy-worker.js
-- mcp_sender_single_render_v1.js
+- mcp_sender_single_render_v2.js
 - package.json
 
 These files are the locked implementation references for the current MCP Sender v2 runtime shape unless SAG approves a different artifact set.
+
+Final closeout identity lock for this approved cycle:
+- official canonical sender filename: mcp_sender_single_render_v2.js
+- human-facing release label: v2.0
+- machine/package/runtime version: 2.0.0
+- same canonical filename complete replacement is the official source-synchronization method for this closeout
+- renamed working variants are approval evidence only and are not the final official source-of-truth after replacement
+
+Previous working/approval artifact identities that are not the final official source-of-truth after replacement:
+- mcp_sender_single_render_v1_1_17.js
+- pre-closeout canonical v1 sender filename
 
 ==================================================
 2. proxy-worker.js ROLE
@@ -41,10 +53,10 @@ Current implementation identity observed in code:
 - Worker behavior depends on UPSTREAM_BASE_URL and wake-related timeout/retry environment keys
 
 ==================================================
-3. mcp_sender_single_render_v1.js ROLE
+3. mcp_sender_single_render_v2.js ROLE
 ==================================================
 
-mcp_sender_single_render_v1.js is the single Render sender server layer.
+mcp_sender_single_render_v2.js is the single Render sender server layer.
 
 Its implementation role is:
 - MCP sender server process
@@ -55,11 +67,14 @@ Its implementation role is:
 - Make webhook send
 - normalized result interpretation
 
-Current implementation identity observed in code:
+Current implementation identity observed in code after closeout replacement:
+- official canonical sender filename is mcp_sender_single_render_v2.js
 - server host/port are runtime-configurable
 - MAKE_WEBHOOK_URL is the upstream send target
 - preview summary / interaction / execution contract are built sender-side
 - accepted_no_json-compatible normalization logic belongs here, not in the Worker proxy
+- release/runtime version-facing identity is unified to 2.0.0
+- execution_contract.contract_version remains the schema version and is not changed by the v2.0 release lock
 
 ==================================================
 4. package.json ROLE
@@ -67,10 +82,11 @@ Current implementation identity observed in code:
 
 package.json records the current Render sender runtime package identity.
 
-Current observed role:
+Current observed role after final closeout unification:
 - package name: ai-dental-clinic-single-render-mcp
-- main: mcp_sender_single_render_v1.js
-- start script launches mcp_sender_single_render_v1.js
+- version: 2.0.0
+- main: mcp_sender_single_render_v2.js
+- start script launches mcp_sender_single_render_v2.js
 
 Interpretation:
 - package.json fixes the current executable entry identity for the single Render sender implementation reference
@@ -89,7 +105,7 @@ Runtime identity source:
 
 Implementation artifacts:
 - proxy-worker.js
-- mcp_sender_single_render_v1.js
+- mcp_sender_single_render_v2.js
 - package.json
 
 Meaning:

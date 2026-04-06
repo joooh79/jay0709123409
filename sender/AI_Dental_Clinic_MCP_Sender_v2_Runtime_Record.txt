@@ -6,6 +6,7 @@ STATUS
 - records the active MCP Sender v2 public runtime identity
 - records the active warm-up proxy endpoint identity and health endpoint
 - records current runtime shape and deployment-facing environment expectations
+- records the final approved closeout runtime/version identity for the v2.0 release cycle
 - does not replace the MCP Sender v2 operational protocol
 - does not replace code artifacts themselves
 
@@ -17,6 +18,11 @@ It exists so that:
 - the active warm-up proxy endpoint is explicitly fixed in source
 - runtime/deployment troubleshooting does not guess the wrong endpoint
 - connector wiring and environment judgments use a shared reference
+
+Release/version identity locked by this source after closeout:
+- human-facing release label: v2.0
+- machine/package/runtime version: 2.0.0
+- execution_contract.contract_version is not changed by this release lock because it is contract schema version, not release/version label
 
 ==================================================
 1. ACTIVE PUBLIC MCP ENDPOINT
@@ -46,6 +52,24 @@ Interpretation:
 - the Worker is the public wake / readiness absorption layer
 - the Render sender is the upstream sender server layer
 - the runtime shape is public-entry-through-Worker, not direct public entry to the Render sender, unless SAG explicitly changes the baseline
+
+==================================================
+2A. FINAL CLOSEOUT VERSION IDENTITY
+==================================================
+
+Approved final closeout version identity:
+- human-facing release label: v2.0
+- machine/package/runtime version: 2.0.0
+
+Runtime-facing version surfaces that should now read 2.0.0 include when applicable:
+- sender runtime version constant
+- /health version surface
+- /manifest version surface
+- MCP serverInfo.version
+- package.json version
+
+This section does not change execution_contract.contract_version.
+That field remains the contract schema version and is not a release/version label.
 
 ==================================================
 3. PUBLIC VS INTERNAL IDENTITY RULE
