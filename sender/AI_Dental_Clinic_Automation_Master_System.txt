@@ -190,7 +190,11 @@ doctor briefing
 7. FINDINGS STRUCTURE
 ==================================================
 
-All findings are parallel branches:
+Findings are represented through:
+- findings_present
+- findings_records[]
+
+Conceptual clinical branches remain:
 - pre_op
 - radiographic
 - operative
@@ -198,24 +202,42 @@ All findings are parallel branches:
 - treatment_plan
 - doctor_reasoning
 
+Interpretation:
+- findings_present preserves branch-level presence flags
+- findings_records[] preserves tooth-level clinical rows
+- final canonical JSON must not use legacy top-level branch sections such as pre_op / radiographic / operative / diagnosis / treatment_plan / doctor_reasoning as final output containers
+
+
 ==================================================
 8. FINDINGS EXECUTION RULE
 ==================================================
 
-Each branch executes only if:
-- the corresponding *_fields_json fragment is not empty
-- and it contains at least one valid field
+Downstream findings execution is row-based under findings_records[] and branch-routed after sender transformation.
+
+Required rule:
+- findings_records[] must contain at least one valid clinical row before execution is allowed
+- a branch may execute only when sender-transformed output for that branch contains at least one valid Airtable-ready field derived from findings_records[]
+- reserved sender-managed fields alone do not justify execution
+
+Reserved sender-managed fields:
+- Record name
+- Visit ID
+- Tooth number
 
 Otherwise:
 - branch execution prohibited
+
 
 ==================================================
 9. MINIMUM FINDING RULE
 ==================================================
 
-If all findings sections are effectively empty:
+If findings_records[] is empty or effectively reserved-only:
 - JSON generation prohibited
 - briefing considered insufficient
+
+Minimum acceptable condition:
+- findings_records[] contains at least 1 valid clinical row with at least 1 real clinical field beyond reserved sender-managed fields
 
 ==================================================
 10. PATIENT ID RULE
@@ -413,7 +435,7 @@ JSON may be generated only when all required conditions are satisfied:
 2. patient status resolved
 3. visit status resolved
 4. relevant date exists
-5. at least one findings section contains real clinical data
+5. findings_records[] contains at least one valid clinical row
 
 Otherwise:
 - JSON generation prohibited
@@ -438,26 +460,48 @@ Direct send-first operation is not the preferred normal execution path after the
 
 Absolute rules:
 - key rename prohibited
-- key omission prohibited
+- key omission prohibited for required contract surfaces
 - null prohibited
-- unused optional field = ""
-- unused slot = ""
-- N/A filler prohibited unless truly selected as an allowed option
-- numeric fields remain numeric
+- legacy top-level findings sections prohibited in final output:
+  - pre_op
+  - radiographic
+  - operative
+  - diagnosis
+  - treatment_plan
+  - doctor_reasoning
+- unused optional text field = ""
+- findings_present flags use true/false only
+- multi_select values use arrays only
+- single_select values use exact allowed option strings only
+- numeric fields remain true numeric values when known
+
+Deterministic identity rules:
+- visits.visit_id = VISIT-{patient_id}-{YYYYMMDD}
+- findings_records[].record_name = {Visit ID}-{Tooth number}-{BRANCH CODE}
 
 Special numeric rule:
-- operative.remaining_cusp_thickness_mm = 0 is treated as placeholder / empty unless explicitly confirmed as true data
+- operative field Remaining cusp thickness (mm) = 0 is treated as placeholder / empty unless explicitly confirmed as true data
+
 
 ==================================================
 16. DOCTOR REASONING RULE
 ==================================================
 
-- doctor_reasoning branch is always present in the JSON structure
-- decision_factor_1~6 may use only allowed decision factor options
-- if nuance does not fit an exact option, preserve it in reasoning_notes
-- remaining_cusp_thickness_decision allowed values:
+Doctor reasoning is preserved as a findings branch through:
+- findings_present.doctor_reasoning
+- findings_records[] rows where:
+  - branch_key = doctor_reasoning
+  - branch_code = DR
+  - branch_label = Doctor Reasoning
+
+Rules:
+- doctor_reasoning rows must use exact Airtable field names inside findings_records[].fields
+- Decision factor uses exact allowed option values and multi-select array shape when applicable
+- if nuance does not fit an exact option, preserve it in Reasoning notes
+- Remaining cusp thickness decision allowed values:
   - >1.5 mm cusp preserved
   - <1.5 mm cusp coverage
+
 
 ==================================================
 17. FAILURE HANDLING RULE
@@ -469,12 +513,18 @@ Immediate stop conditions:
 3. unresolved visit status
 4. patient search fail after allowed re-check is exhausted or unavailable
 5. visit duplication
-6. all findings empty
+6. findings_records[] empty or reserved-only
+7. sender-contract-required identifiers missing when final JSON is being prepared
+8. selectable field name invention
+9. selectable option guessing
+10. wrong multi-select typing
+11. wrong numeric typing
 
 Prohibited:
 - automatic fallback
 - invented data
 - guessed option values
+- legacy flat-contract output when canonical findings_records contract is required
 
 ==================================================
 18. EDIT AUTHORITY LOCK
